@@ -81,6 +81,8 @@ pub struct PromptArgs {
     pub files: Vec<String>,
     #[arg(long = "focus")]
     pub focus: Vec<String>,
+    #[arg(long = "type", help = "Change type: server, db, frontend, infra")]
+    pub change_type: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 }
@@ -116,6 +118,7 @@ impl RunArgs {
             context_files: self.prompt.context_files.clone(),
             files,
             focus: self.prompt.focus.clone(),
+            change_type: self.prompt.change_type.clone(),
             format: self.prompt.format,
         }
     }
