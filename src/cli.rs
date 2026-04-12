@@ -74,6 +74,10 @@ pub struct PromptArgs {
     #[arg(long)]
     pub expected_edge: Option<String>,
     #[arg(long)]
+    pub issue: Option<String>,
+    #[arg(long = "test-result")]
+    pub test_results: Vec<String>,
+    #[arg(long)]
     pub diff_file: Option<PathBuf>,
     #[arg(long = "context-file")]
     pub context_files: Vec<PathBuf>,
@@ -114,6 +118,8 @@ impl RunArgs {
             expected_normal: self.prompt.expected_normal.clone(),
             expected_error: self.prompt.expected_error.clone(),
             expected_edge: self.prompt.expected_edge.clone(),
+            issue: self.prompt.issue.clone(),
+            test_results: self.prompt.test_results.clone(),
             diff_file: self.prompt.diff_file.clone(),
             context_files: self.prompt.context_files.clone(),
             files,
@@ -144,6 +150,8 @@ impl ReviewArgs {
             || self.prompt_args.expected_normal.is_some()
             || self.prompt_args.expected_error.is_some()
             || self.prompt_args.expected_edge.is_some()
+            || self.prompt_args.issue.is_some()
+            || !self.prompt_args.test_results.is_empty()
             || self.prompt_args.diff_file.is_some()
             || !self.prompt_args.context_files.is_empty()
             || !self.prompt_args.files.is_empty()

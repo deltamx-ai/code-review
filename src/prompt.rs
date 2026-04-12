@@ -43,8 +43,10 @@ pub struct PromptOutput {
 pub struct PromptSummary {
     pub stack: Option<String>,
     pub goal: Option<String>,
+    pub issue: Option<String>,
     pub rules_count: usize,
     pub risks: Vec<String>,
+    pub test_results_count: usize,
     pub files: Vec<String>,
     pub context_files: Vec<String>,
     pub has_diff: bool,
@@ -55,8 +57,10 @@ impl PromptSummary {
         Self {
             stack: args.stack.clone(),
             goal: args.goal.clone(),
+            issue: args.issue.clone(),
             rules_count: args.rules.len(),
             risks: args.risks.clone(),
+            test_results_count: args.test_results.len(),
             files: args.files.clone(),
             context_files: args
                 .context_files
@@ -103,6 +107,16 @@ pub fn validate_args(args: &PromptArgs, has_diff: bool, has_context: bool) -> Va
         || args.expected_edge.is_some()
     {
         score += 10;
+    }
+    if args.issue.is_some() {
+        score += 5;
+    } else {
+        suggestions.push("补充 Issue/需求描述，方便判断改动是否偏题".into());
+    }
+    if !args.test_results.is_empty() {
+        score += 5;
+    } else {
+        suggestions.push("补充测试结果，方便判断风险是否已有覆盖".into());
     }
 
     ValidationResult {
@@ -151,6 +165,9 @@ pub fn build_prompt_from_sources(
     if let Some(v) = &args.why {
         out.push_str(&format!("背景原因: {}\n", v));
     }
+    if let Some(v) = &args.issue {
+        out.push_str(&format!("Issue/需求描述: {}\n", v));
+    }
     if !args.rules.is_empty() {
         out.push_str(&format!("业务规则:\n- {}\n", args.rules.join("\n- ")));
     }
@@ -165,6 +182,9 @@ pub fn build_prompt_from_sources(
     }
     if let Some(v) = &args.expected_edge {
         out.push_str(&format!("边界预期: {}\n", v));
+    }
+    if !args.test_results.is_empty() {
+        out.push_str(&format!("测试结果:\n- {}\n", args.test_results.join("\n- ")));
     }
     if !args.files.is_empty() {
         out.push_str(&format!("涉及文件:\n- {}\n", args.files.join("\n- ")));
@@ -219,11 +239,13 @@ pub fn print_template(format: OutputFormat) -> Result<()> {
         "stack": "Rust + Axum + PostgreSQL",
         "goal": "修复重复下单",
         "why": "线上偶发重复提交",
+        "issue": "支付接口在网络重试下出现重复创建订单",
         "rules": ["一个订单只能支付一次", "幂等键必须生效"],
         "risks": ["并发", "事务一致性"],
         "expected_normal": "首次提交成功",
         "expected_error": "重复提交返回冲突",
-        "expected_edge": "网络重试不应双写"
+        "expected_edge": "网络重试不应双写",
+        "test_results": ["订单单测通过", "幂等集成测试待补"]
     });
     match format {
         OutputFormat::Text => println!("{}", serde_json::to_string_pretty(&tpl)?),
@@ -247,6 +269,8 @@ mod tests {
             expected_normal: None,
             expected_error: None,
             expected_edge: None,
+            issue: None,
+            test_results: vec![],
             diff_file: None,
             context_files: vec![],
             files: vec![],
