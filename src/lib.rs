@@ -356,6 +356,7 @@ mod tests {
             context_files: vec![],
             files: vec!["src/order/service.rs".into()],
             focus: vec![],
+            baseline_files: vec![],
             change_type: None,
             format: cli::OutputFormat::Text,
         };
