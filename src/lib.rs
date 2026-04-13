@@ -8,6 +8,9 @@ pub mod gitops;
 pub mod jira;
 pub mod models;
 pub mod prompt;
+pub mod review_parser;
+pub mod review_render;
+pub mod review_schema;
 pub mod session;
 
 use admission::check_admission;
@@ -19,6 +22,8 @@ use jira::{enrich_prompt_args, maybe_expand_context_files};
 use prompt::{
     build_prompt, build_prompt_from_sources, print_template, PromptOutput, PromptSummary,
 };
+use review_parser::parse_review_text;
+use review_render::render_review_result_text;
 use regex::Regex;
 use session::SessionStore;
 use std::collections::BTreeSet;
@@ -235,8 +240,13 @@ pub fn run() -> Result<()> {
             if args.model.is_none() {
                 args.model = default_model;
             }
-            let prompt = if let Some(prompt) = args.prompt.clone() {
-                prompt
+            let (prompt, mode, used_rules, admission) = if let Some(prompt) = args.prompt.clone() {
+                (
+                    prompt,
+                    cli::ReviewMode::Standard,
+                    Vec::new(),
+                    None,
+                )
             } else if let Some(mut prompt_args) = args.to_prompt_args() {
                 config::apply_config_defaults(&mut prompt_args, &cfg);
                 let repo_files = prompt_args.files.clone();
@@ -250,12 +260,24 @@ pub fn run() -> Result<()> {
                 if !admission.ok {
                     bail!("review blocked: {}", admission.block_reasons.join(" | "));
                 }
-                build_prompt(&prompt_args)?
+                (
+                    build_prompt(&prompt_args)?,
+                    prompt_args.mode,
+                    prompt_args.rules.clone(),
+                    Some(admission),
+                )
             } else {
                 bail!("provide --prompt or enough prompt-building flags");
             };
             let response = copilot::run_review(&store, &prompt, args.model.as_deref())?;
-            println!("{}", response);
+            let mut parsed = parse_review_text(mode, &response, used_rules);
+            if let Some(admission) = admission {
+                parsed.apply_admission(admission.ok, admission.level, admission.score, admission.confidence);
+            }
+            match args.prompt_args.format {
+                cli::OutputFormat::Text => println!("{}", render_review_result_text(&parsed)),
+                cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&parsed)?),
+            }
         }
     }
 
@@ -350,6 +372,13 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
 
     let stage1_prompt = build_prompt_from_sources(&prompt_args, Some(diff.clone()), stage1_contexts)?;
     let stage1_output = copilot::run_review(store, &stage1_prompt, args.model.as_deref())?;
+    let mut stage1_parsed = parse_review_text(prompt_args.mode, &stage1_output, prompt_args.rules.clone());
+    stage1_parsed.apply_admission(
+        stage1_admission.ok,
+        stage1_admission.level,
+        stage1_admission.score,
+        stage1_admission.confidence,
+    );
 
     let (stage2_files, stage2_hints) = extract_stage2_focus(&stage1_output);
     let mut stage2_args = prompt_args.clone();
@@ -388,8 +417,29 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
     }
     stage2_prompt.push_str("请避免重复第一阶段结论，优先确认真正的业务逻辑问题、实现逻辑问题和跨文件联动风险。\n");
     let stage2_output = copilot::run_review(store, &stage2_prompt, args.model.as_deref())?;
+    let mut stage2_parsed = parse_review_text(stage2_args.mode, &stage2_output, stage2_args.rules.clone());
+    stage2_parsed.apply_admission(
+        stage1_admission.ok,
+        stage1_admission.level,
+        stage1_admission.score,
+        stage1_admission.confidence,
+    );
 
-    println!("## Stage 1 Review\n{}\n\n## Stage 2 Review\n{}", stage1_output, stage2_output);
+    match args.prompt.format {
+        cli::OutputFormat::Text => {
+            println!("## Stage 1 Review\n{}\n", render_review_result_text(&stage1_parsed));
+            println!("## Stage 2 Review\n{}", render_review_result_text(&stage2_parsed));
+        }
+        cli::OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "stage1": stage1_parsed,
+                    "stage2": stage2_parsed
+                }))?
+            );
+        }
+    }
     Ok(())
 }
 
