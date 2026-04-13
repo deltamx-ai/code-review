@@ -16,6 +16,10 @@ pub enum Commands {
     Assemble(PromptArgs),
     Run(RunArgs),
     DeepReview(DeepReviewArgs),
+    Models {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -57,7 +61,7 @@ pub struct LoginArgs {
     pub no_open: bool,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize)]
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReviewMode {
     Lite,

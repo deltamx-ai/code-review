@@ -60,6 +60,33 @@ cargo build
 cargo test
 ```
 
+## 配置文件
+
+默认配置文件路径：
+
+```bash
+~/.config/code-review/config.toml
+```
+
+示例：
+
+```toml
+[llm]
+provider = "copilot"
+model = "gpt-5.4"
+models = ["gpt-5.4", "opus", "gpt-5"]
+
+[jira]
+provider = "native"
+base_url = "https://your-company.atlassian.net"
+
+[review]
+mode = "standard"
+include_context = true
+context_budget_bytes = 48000
+context_file_max_bytes = 12000
+```
+
 ## 常见命令
 
 ### 登录
@@ -74,6 +101,13 @@ code-review auth login
 code-review auth status
 code-review auth whoami
 code-review auth refresh
+```
+
+### 查看可用模型
+
+```bash
+code-review models
+code-review models --format json
 ```
 
 ### 登出

@@ -207,6 +207,9 @@ pub fn build_prompt_from_sources(
         out.push_str(&format!("额外关注点:\n- {}\n", args.focus.join("\n- ")));
     }
     if !args.baseline_files.is_empty() {
+        out.push_str(&format!("基线/红线文件:\n- {}\n", args.baseline_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
+    }
+    if !args.baseline_files.is_empty() {
         out.push_str(&format!("基线/红线参考文件:\n- {}\n", args.baseline_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
     }
     if let Some(t) = &args.change_type {

@@ -1,15 +1,18 @@
 pub mod cli;
+pub mod config;
 pub mod context;
 pub mod copilot;
 pub mod expand;
 pub mod gitops;
 pub mod jira;
+pub mod models;
 pub mod prompt;
 pub mod session;
 
 use anyhow::{bail, Result};
 use clap::Parser;
 use cli::{AuthCommand, Cli, Commands};
+use config::load_config;
 use jira::{enrich_prompt_args, maybe_expand_context_files};
 use prompt::{
     build_prompt, build_prompt_from_sources, print_template, validate_args, PromptOutput,
@@ -21,10 +24,12 @@ use std::collections::BTreeSet;
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let cfg = load_config()?;
     let store = SessionStore::new_default()?;
 
     match cli.command {
         Commands::Prompt(mut args) => {
+            config::apply_config_defaults(&mut args, &cfg);
             let repo_files = args.files.clone();
             enrich_prompt_args(&mut args, &repo_files)?;
             maybe_expand_context_files(&mut args, &repo_files);
@@ -43,12 +48,25 @@ pub fn run() -> Result<()> {
             )?;
         }
         Commands::Assemble(mut args) => {
+            config::apply_config_defaults(&mut args, &cfg);
             let repo_files = args.files.clone();
             enrich_prompt_args(&mut args, &repo_files)?;
             maybe_expand_context_files(&mut args, &repo_files);
             println!("{}", serde_json::to_string_pretty(&args)?);
         }
-        Commands::Run(args) => {
+        Commands::Run(mut args) => {
+            config::apply_config_defaults(&mut args.prompt, &cfg);
+            if let Some(include_context) = cfg.review.include_context {
+                if !args.include_context {
+                    args.include_context = include_context;
+                }
+            }
+            if args.context_budget_bytes == 48_000 {
+                if let Some(v) = cfg.review.context_budget_bytes { args.context_budget_bytes = v; }
+            }
+            if args.context_file_max_bytes == 12_000 {
+                if let Some(v) = cfg.review.context_file_max_bytes { args.context_file_max_bytes = v; }
+            }
             gitops::ensure_git_repo(&args.repo)?;
             let diff = gitops::git_diff(&args.repo, &args.git)?;
             if diff.trim().is_empty() {
@@ -98,11 +116,31 @@ pub fn run() -> Result<()> {
                 PromptSummary::from_prompt_args(&prompt_args),
             )?;
         }
-        Commands::DeepReview(args) => {
+        Commands::DeepReview(mut args) => {
+            config::apply_config_defaults(&mut args.prompt, &cfg);
+            if args.model.is_none() {
+                args.model = cfg.llm.model.clone();
+            }
+            if let Some(include_context) = cfg.review.include_context {
+                if !args.include_context {
+                    args.include_context = include_context;
+                }
+            }
+            if args.context_budget_bytes == 48_000 {
+                if let Some(v) = cfg.review.context_budget_bytes { args.context_budget_bytes = v; }
+            }
+            if args.context_file_max_bytes == 12_000 {
+                if let Some(v) = cfg.review.context_file_max_bytes { args.context_file_max_bytes = v; }
+            }
             run_deep_review(&store, args)?;
+        }
+        Commands::Models { format } => {
+            let models = models::list_models(&cfg);
+            models.print(format)?;
         }
         Commands::Template { format } => print_template(format)?,
         Commands::Validate(mut args) => {
+            config::apply_config_defaults(&mut args, &cfg);
             let repo_files = args.files.clone();
             jira::enrich_prompt_args(&mut args, &repo_files)?;
             let validation = validate_args(
@@ -135,14 +173,19 @@ pub fn run() -> Result<()> {
                 info.print(format)?;
             }
         },
-        Commands::Review(args) => {
+        Commands::Review(mut args) => {
             let status = copilot::status(&store)?;
             if !status.logged_in {
                 bail!("Copilot is not authenticated. Run `code-review auth login` first.");
             }
+            let default_model = cfg.llm.model.clone();
+            if args.model.is_none() {
+                args.model = default_model;
+            }
             let prompt = if let Some(prompt) = args.prompt.clone() {
                 prompt
             } else if let Some(mut prompt_args) = args.to_prompt_args() {
+                config::apply_config_defaults(&mut prompt_args, &cfg);
                 let repo_files = prompt_args.files.clone();
                 enrich_prompt_args(&mut prompt_args, &repo_files)?;
                 maybe_expand_context_files(&mut prompt_args, &repo_files);
