@@ -15,6 +15,7 @@ pub enum Commands {
     Prompt(PromptArgs),
     Assemble(PromptArgs),
     Run(RunArgs),
+    DeepReview(DeepReviewArgs),
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -56,8 +57,18 @@ pub struct LoginArgs {
     pub no_open: bool,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewMode {
+    Lite,
+    Standard,
+    Critical,
+}
+
 #[derive(Args, Debug, Clone, serde::Serialize)]
 pub struct PromptArgs {
+    #[arg(long, value_enum, default_value_t = ReviewMode::Standard)]
+    pub mode: ReviewMode,
     #[arg(long)]
     pub stack: Option<String>,
     #[arg(long)]
@@ -119,6 +130,53 @@ pub struct RunArgs {
 impl RunArgs {
     pub fn to_prompt_args(&self, files: Vec<String>) -> PromptArgs {
         PromptArgs {
+            mode: self.prompt.mode,
+            stack: self.prompt.stack.clone(),
+            goal: self.prompt.goal.clone(),
+            why: self.prompt.why.clone(),
+            rules: self.prompt.rules.clone(),
+            risks: self.prompt.risks.clone(),
+            expected_normal: self.prompt.expected_normal.clone(),
+            expected_error: self.prompt.expected_error.clone(),
+            expected_edge: self.prompt.expected_edge.clone(),
+            issue: self.prompt.issue.clone(),
+            test_results: self.prompt.test_results.clone(),
+            jira: self.prompt.jira.clone(),
+            jira_base_url: self.prompt.jira_base_url.clone(),
+            jira_provider: self.prompt.jira_provider.clone(),
+            jira_command: self.prompt.jira_command.clone(),
+            diff_file: self.prompt.diff_file.clone(),
+            context_files: self.prompt.context_files.clone(),
+            files,
+            focus: self.prompt.focus.clone(),
+            change_type: self.prompt.change_type.clone(),
+            format: self.prompt.format,
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize)]
+pub struct DeepReviewArgs {
+    #[arg(long)]
+    pub git: String,
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[command(flatten)]
+    pub prompt: PromptArgs,
+    #[arg(long, default_value_t = true)]
+    pub include_context: bool,
+    #[arg(long, default_value_t = 48_000)]
+    pub context_budget_bytes: usize,
+    #[arg(long, default_value_t = 12_000)]
+    pub context_file_max_bytes: usize,
+}
+
+impl DeepReviewArgs {
+    pub fn to_prompt_args(&self, files: Vec<String>) -> PromptArgs {
+        PromptArgs {
+            mode: self.prompt.mode,
             stack: self.prompt.stack.clone(),
             goal: self.prompt.goal.clone(),
             why: self.prompt.why.clone(),

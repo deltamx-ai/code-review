@@ -1,4 +1,4 @@
-use crate::cli::{OutputFormat, PromptArgs};
+use crate::cli::{OutputFormat, PromptArgs, ReviewMode};
 use crate::context::ContextCollection;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -94,12 +94,12 @@ pub fn validate_args(args: &PromptArgs, has_diff: bool, has_context: bool) -> Va
     }
     if has_context {
         score += 20;
-    } else {
+    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
         suggestions.push("补充上下文文件或涉及模块，减少误判".into());
     }
     if !args.rules.is_empty() {
         score += 10;
-    } else {
+    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
         suggestions.push("补充业务规则，AI 才知道什么算 bug".into());
     }
     if args.expected_normal.is_some()
@@ -110,17 +110,30 @@ pub fn validate_args(args: &PromptArgs, has_diff: bool, has_context: bool) -> Va
     }
     if args.issue.is_some() {
         score += 5;
-    } else {
+    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
         suggestions.push("补充 Issue/需求描述，方便判断改动是否偏题".into());
     }
     if !args.test_results.is_empty() {
         score += 5;
-    } else {
+    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
         suggestions.push("补充测试结果，方便判断风险是否已有覆盖".into());
     }
+    if matches!(args.mode, ReviewMode::Critical) {
+        if args.focus.is_empty() {
+            suggestions.push("critical 模式建议补充事故经验、安全/性能红线或额外重点关注点".into());
+        } else {
+            score += 5;
+        }
+    }
+
+    let ok_threshold = match args.mode {
+        ReviewMode::Lite => 30,
+        ReviewMode::Standard => 40,
+        ReviewMode::Critical => 50,
+    };
 
     ValidationResult {
-        ok: score >= 40,
+        ok: score >= ok_threshold,
         score,
         missing_required: missing,
         suggestions,
@@ -159,6 +172,7 @@ pub fn build_prompt_from_sources(
     if let Some(v) = &args.stack {
         out.push_str(&format!("技术栈: {}\n", v));
     }
+    out.push_str(&format!("Review 模式: {:?}\n", args.mode));
     if let Some(v) = &args.goal {
         out.push_str(&format!("改动目标: {}\n", v));
     }
@@ -261,6 +275,7 @@ mod tests {
     #[test]
     fn validate_scores() {
         let args = PromptArgs {
+            mode: ReviewMode::Standard,
             stack: Some("Rust".into()),
             goal: Some("fix".into()),
             why: None,

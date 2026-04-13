@@ -49,3 +49,21 @@ pub fn git_changed_files(repo: &PathBuf, rev: &str) -> Result<Vec<String>> {
         .map(ToOwned::to_owned)
         .collect())
 }
+
+pub fn list_repo_files(repo: &PathBuf) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("ls-files")
+        .output()
+        .with_context(|| format!("failed to list repo files in {}", repo.display()))?;
+    if !output.status.success() {
+        bail!("git ls-files failed in {}", repo.display());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}

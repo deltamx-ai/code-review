@@ -5,7 +5,9 @@
 ## 现在支持什么
 
 - `prompt`：从结构化输入生成 review prompt
-- `run`：从 `git diff` 自动提取改动并生成 prompt
+- `assemble`：预览自动装配结果（含 Jira enrich）
+- `run`：从 `git diff` 自动提取改动并生成 prompt，并自动扩展部分关联上下文
+- `deep-review`：执行两阶段 review，第一轮先审，第二轮基于高风险点自动扩展上下文再深挖
 - `validate`：检查 review 输入是否充分
 - `template`：输出 review 模板
 - `auth login`：调用真实 `copilot login`
@@ -83,8 +85,14 @@ code-review auth logout --clear-remote
 
 ### 生成 prompt
 
+支持三种 mode：
+- `lite`：轻量版，适合日常 PR 快速筛错
+- `standard`：标准版，适合常规团队 review
+- `critical`：高价值版，适合核心业务，建议补更多 focus / 风险信息
+
 ```bash
 code-review prompt \
+  --mode standard \
   --stack "Rust + Axum + PostgreSQL" \
   --goal "修复重复下单" \
   --why "线上偶发重复提交" \
@@ -155,6 +163,36 @@ code-review review \
   --rule "一个订单只能支付一次" \
   --expected-normal "首次提交成功" \
   --diff-file /tmp/change.diff
+```
+
+### 两阶段深度 review
+
+`deep-review` 会先跑第一轮 review，然后自动从第一轮输出中提取：
+- 文件路径
+- 高风险点
+- 不确定点
+- 疑似关键函数/方法
+
+并在第二轮里自动补更多关联上下文文件（test / dto / model / contract / 同目录高价值文件），更适合抓业务问题和实现逻辑问题。
+
+```bash
+code-review deep-review \
+  --repo . \
+  --git origin/main...HEAD \
+  --include-context \
+  --jira PROJ-123 \
+  --jira-base-url https://your-company.atlassian.net
+```
+
+如果你不接 Jira，也可以手工传上下文：
+
+```bash
+code-review deep-review \
+  --repo . \
+  --git HEAD~1..HEAD \
+  --include-context \
+  --stack "Java 17 + Spring Boot 3" \
+  --goal "修复重复下单"
 ```
 
 ## Prompt 策略
