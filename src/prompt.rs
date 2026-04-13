@@ -1,4 +1,5 @@
-use crate::cli::{OutputFormat, PromptArgs, ReviewMode};
+use crate::admission::{check_admission, AdmissionResult};
+use crate::cli::{OutputFormat, PromptArgs};
 use crate::context::ContextCollection;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -73,68 +74,21 @@ impl PromptSummary {
 }
 
 pub fn validate_args(args: &PromptArgs, has_diff: bool, has_context: bool) -> ValidationResult {
-    let mut score = 0u8;
-    let mut missing = Vec::new();
-    let mut suggestions = Vec::new();
+    let admission = check_admission(args, has_diff, has_context);
+    validation_from_admission(admission)
+}
 
-    if args.goal.is_some() {
-        score += 20;
-    } else {
-        missing.push("goal".into());
-    }
-    if args.stack.is_some() {
-        score += 10;
-    } else {
-        suggestions.push("补充技术栈，方便判断框架惯例和隐患".into());
-    }
-    if has_diff {
-        score += 30;
-    } else {
-        missing.push("diff".into());
-    }
-    if has_context {
-        score += 20;
-    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
-        suggestions.push("补充上下文文件或涉及模块，减少误判".into());
-    }
-    if !args.rules.is_empty() {
-        score += 10;
-    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
-        suggestions.push("补充业务规则，AI 才知道什么算 bug".into());
-    }
-    if args.expected_normal.is_some()
-        || args.expected_error.is_some()
-        || args.expected_edge.is_some()
-    {
-        score += 10;
-    }
-    if args.issue.is_some() {
-        score += 5;
-    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
-        suggestions.push("补充 Issue/需求描述，方便判断改动是否偏题".into());
-    }
-    if !args.test_results.is_empty() {
-        score += 5;
-    } else if matches!(args.mode, ReviewMode::Standard | ReviewMode::Critical) {
-        suggestions.push("补充测试结果，方便判断风险是否已有覆盖".into());
-    }
-    if matches!(args.mode, ReviewMode::Critical) {
-        if args.focus.is_empty() {
-            suggestions.push("critical 模式建议补充事故经验、安全/性能红线或额外重点关注点".into());
-        } else {
-            score += 5;
-        }
-    }
+fn validation_from_admission(admission: AdmissionResult) -> ValidationResult {
+    let mut missing = admission.missing_p0;
+    missing.extend(admission.missing_p1);
 
-    let ok_threshold = match args.mode {
-        ReviewMode::Lite => 30,
-        ReviewMode::Standard => 40,
-        ReviewMode::Critical => 50,
-    };
+    let mut suggestions = admission.suggestions;
+    suggestions.extend(admission.warnings);
+    suggestions.extend(admission.block_reasons);
 
     ValidationResult {
-        ok: score >= ok_threshold,
-        score,
+        ok: admission.ok,
+        score: admission.score,
         missing_required: missing,
         suggestions,
     }
@@ -281,7 +235,7 @@ mod tests {
     #[test]
     fn validate_scores() {
         let args = PromptArgs {
-            mode: ReviewMode::Standard,
+            mode: crate::cli::ReviewMode::Standard,
             stack: Some("Rust".into()),
             goal: Some("fix".into()),
             why: None,
@@ -305,6 +259,7 @@ mod tests {
             format: OutputFormat::Text,
         };
         let result = validate_args(&args, true, false);
-        assert!(result.score >= 40);
+        assert!(result.ok);
+        assert!(result.missing_required.iter().any(|m| m == "expected_behavior" || m == "context" || m == "issue" || m == "test_results"));
     }
 }
