@@ -12,6 +12,7 @@ pub mod review_layers;
 pub mod review_parser;
 pub mod review_render;
 pub mod review_schema;
+pub mod risk;
 pub mod session;
 
 use admission::check_admission;
@@ -25,6 +26,7 @@ use prompt::{
 };
 use review_parser::parse_review_text;
 use review_render::render_review_result_text;
+use risk::analyze_risks;
 use regex::Regex;
 use session::SessionStore;
 use std::collections::BTreeSet;
@@ -275,6 +277,12 @@ pub fn run() -> Result<()> {
             if let Some(admission) = admission {
                 parsed.apply_admission(admission.ok, admission.level, admission.score, admission.confidence);
             }
+            if let Some(prompt_args) = args.to_prompt_args() {
+                let changed_files = if !prompt_args.files.is_empty() { prompt_args.files.clone() } else { Vec::new() };
+                let risk_analysis = analyze_risks(&prompt_args, &changed_files, None);
+                parsed.apply_risk_analysis(risk_analysis);
+                parsed.finalize();
+            }
             match args.prompt_args.format {
                 cli::OutputFormat::Text => println!("{}", render_review_result_text(&parsed)),
                 cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&parsed)?),
@@ -380,6 +388,8 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
         stage1_admission.score,
         stage1_admission.confidence,
     );
+    stage1_parsed.apply_risk_analysis(analyze_risks(&prompt_args, &changed_files, Some(&diff)));
+    stage1_parsed.finalize();
 
     let (stage2_files, stage2_hints) = extract_stage2_focus(&stage1_output);
     let mut stage2_args = prompt_args.clone();
@@ -425,6 +435,8 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
         stage1_admission.score,
         stage1_admission.confidence,
     );
+    stage2_parsed.apply_risk_analysis(analyze_risks(&stage2_args, &stage2_args.files, None));
+    stage2_parsed.finalize();
 
     match args.prompt.format {
         cli::OutputFormat::Text => {

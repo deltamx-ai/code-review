@@ -21,15 +21,23 @@ pub fn render_review_result_text(result: &ReviewResult) -> String {
         out.push('\n');
     }
 
+    if !result.risk_hints.is_empty() {
+        out.push_str("6. 程序级风险提示\n");
+        for hint in &result.risk_hints {
+            out.push_str(&format!("- {}\n  detail: {}\n  source: {}\n", hint.title, hint.detail, hint.source));
+        }
+        out.push('\n');
+    }
+
     if !result.release_checks.is_empty() {
-        out.push_str("6. 发布建议 / 人工确认项\n");
+        out.push_str("7. 发布建议 / 人工确认项\n");
         for item in &result.release_checks {
             out.push_str(&format!("- {}\n", item));
         }
         out.push('\n');
     }
 
-    out.push_str("7. 总结结论\n");
+    out.push_str("8. 总结结论\n");
     out.push_str(&format!("{}\n", result.summary));
     out
 }

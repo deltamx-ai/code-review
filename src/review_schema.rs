@@ -1,5 +1,6 @@
 use crate::admission::{AdmissionLevel, ReviewConfidence};
 use crate::cli::ReviewMode;
+use crate::risk::RiskAnalysis;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -20,6 +21,13 @@ pub struct MissingTestCase {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+pub struct RiskHintView {
+    pub title: String,
+    pub detail: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ReviewResult {
     pub mode: String,
     pub input_ok: bool,
@@ -35,6 +43,7 @@ pub struct ReviewResult {
     pub used_rules: Vec<String>,
     pub impact_scope: Vec<String>,
     pub release_checks: Vec<String>,
+    pub risk_hints: Vec<RiskHintView>,
     pub raw_text: String,
 }
 
@@ -54,6 +63,26 @@ impl ReviewResult {
         self.confidence = confidence_str(confidence).into();
     }
 
+    pub fn apply_risk_analysis(&mut self, analysis: RiskAnalysis) {
+        for item in analysis.impact_scope {
+            if !self.impact_scope.iter().any(|v| v == &item) {
+                self.impact_scope.push(item);
+            }
+        }
+        for item in analysis.release_checks {
+            if !self.release_checks.iter().any(|v| v == &item) {
+                self.release_checks.push(item);
+            }
+        }
+        for hint in analysis.hints {
+            self.risk_hints.push(RiskHintView {
+                title: hint.title,
+                detail: hint.detail,
+                source: hint.source,
+            });
+        }
+    }
+
     pub fn finalize(&mut self) {
         if self.summary.trim().is_empty() {
             self.summary = if self.high_risk.is_empty() && self.medium_risk.is_empty() {
@@ -66,7 +95,7 @@ impl ReviewResult {
                 )
             };
         }
-        self.needs_human_review = !self.high_risk.is_empty() || !self.impact_scope.is_empty() || !self.release_checks.is_empty();
+        self.needs_human_review = !self.high_risk.is_empty() || !self.impact_scope.is_empty() || !self.release_checks.is_empty() || !self.risk_hints.is_empty();
     }
 }
 

@@ -2,6 +2,7 @@ use crate::admission::{check_admission, AdmissionResult};
 use crate::cli::{OutputFormat, PromptArgs};
 use crate::context::ContextCollection;
 use crate::review_layers::{build_review_layers, render_layers_prompt};
+use crate::risk::analyze_risks;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
@@ -172,6 +173,28 @@ pub fn build_prompt_from_sources(
     out.push_str(&render_layers_prompt(&layers));
     out.push('\n');
 
+    let context_paths = contexts.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
+    let changed_files = if !args.files.is_empty() {
+        args.files.clone()
+    } else {
+        context_paths.clone()
+    };
+    let diff_ref = diff.as_deref();
+    let risk_analysis = analyze_risks(args, &changed_files, diff_ref);
+    if !risk_analysis.hints.is_empty() || !risk_analysis.impact_scope.is_empty() || !risk_analysis.release_checks.is_empty() {
+        out.push_str("程序级风险提示:\n");
+        for hint in &risk_analysis.hints {
+            out.push_str(&format!("- {}: {}（source: {}）\n", hint.title, hint.detail, hint.source));
+        }
+        for item in &risk_analysis.impact_scope {
+            out.push_str(&format!("- 风险影响面: {}\n", item));
+        }
+        for item in &risk_analysis.release_checks {
+            out.push_str(&format!("- 发布确认项: {}\n", item));
+        }
+        out.push('\n');
+    }
+
     out.push_str("输出约束:\n请严格按照以下格式输出你的 Review 结果：\n1. 高风险问题（优先展示漏洞、业务逻辑错误、并发/事务/安全问题，每个问题给出文件/函数定位、危险原因、触发场景、修复建议）\n2. 中风险问题（架构破坏、分层违规、严重性能隐患等）\n3. 低风险优化建议（仅包含高价值优化，忽略纯格式、命名风格、“考虑抽离个函数”等无关紧要的重构废话）\n4. 缺失的测试场景（正常/异常/边界未覆盖的情况）\n5. 总结结论（如果没有明显问题，明确说明“未发现高风险问题”）\n");
     if matches!(args.mode, crate::cli::ReviewMode::Critical) {
         out.push_str("6. 风险影响面（必须列出兼容性、迁移、联调、上下游影响）\n7. 发布建议 / 人工确认项（必须列出灰度、回滚、人工确认建议）\n");
@@ -276,5 +299,15 @@ mod tests {
         assert!(prompt.contains("业务层"));
         assert!(prompt.contains("风险层"));
         assert!(prompt.contains("风险影响面"));
+    }
+
+    #[test]
+    fn prompt_contains_programmatic_risk_hints() {
+        let mut args = sample_args(crate::cli::ReviewMode::Critical);
+        args.files = vec!["migrations/001_add_order.sql".into(), "src/order/api.rs".into()];
+        let prompt = build_prompt_from_sources(&args, Some("ALTER TABLE orders ADD COLUMN foo INT".into()), ContextCollection::default()).unwrap();
+        assert!(prompt.contains("程序级风险提示"));
+        assert!(prompt.contains("数据库迁移风险"));
+        assert!(prompt.contains("API / 契约变更风险"));
     }
 }

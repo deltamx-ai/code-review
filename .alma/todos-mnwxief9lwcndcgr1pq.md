@@ -11,4 +11,5 @@
 - [x] 实现 review_parser.rs 结果解析
 - [x] 把 schema/parser 接到 review / deep-review 输出
 - [x] 实现 review_layers.rs 四层审查抽象
+- [x] 实现 risk.rs 风险分析器雏形并接入 prompt / review 输出
 - [ ] ~提交并推送当前改动~ *(in progress)*
