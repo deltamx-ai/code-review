@@ -1,6 +1,7 @@
 use crate::admission::{check_admission, AdmissionResult};
 use crate::cli::{OutputFormat, PromptArgs};
 use crate::context::ContextCollection;
+use crate::review_layers::{build_review_layers, render_layers_prompt};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
@@ -166,18 +167,16 @@ pub fn build_prompt_from_sources(
     if !args.baseline_files.is_empty() {
         out.push_str(&format!("基线/红线参考文件:\n- {}\n", args.baseline_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
     }
-    if let Some(t) = &args.change_type {
-        out.push_str(&format!("变更类型: {}\n额外检查要求:\n", t));
-        match t.as_str() {
-            "server" => out.push_str("- 检查异常响应结构是否一致\n- 检查事务边界是否正确\n- 检查并发访问是否有问题\n- 检查对上下游依赖是否有破坏\n"),
-            "db" => out.push_str("- 检查表结构变更风险\n- 检查索引变更是否合理\n- 评估数据量级对性能的影响\n- 确认是否需要在线迁移\n- 确认是否有回滚方案\n"),
-            "frontend" => out.push_str("- 检查页面交互预期\n- 检查状态管理是否正确\n- 检查浏览器兼容要求\n- 检查埋点、权限和路由规则\n"),
-            "infra" => out.push_str("- 检查执行环境是否正确\n- 检查触发条件是否合理\n- 检查权限范围是否越界\n- 检查失败回退策略是否健全\n"),
-            _ => out.push_str(&format!("- 关注此类型的特定风险点\n")),
-        }
-    }
+    let layers = build_review_layers(args);
+    out.push('\n');
+    out.push_str(&render_layers_prompt(&layers));
+    out.push('\n');
 
-    out.push_str("\n输出约束:\n请严格按照以下格式输出你的 Review 结果：\n1. 高风险问题（优先展示漏洞、业务逻辑错误、并发/事务/安全问题，每个问题给出文件/函数定位、危险原因、触发场景、修复建议）\n2. 中风险问题（架构破坏、分层违规、严重性能隐患等）\n3. 低风险优化建议（仅包含高价值优化，忽略纯格式、命名风格、“考虑抽离个函数”等无关紧要的重构废话）\n4. 缺失的测试场景（正常/异常/边界未覆盖的情况）\n5. 总结结论（如果没有明显问题，明确说明“未发现高风险问题”）\n证据不足时明确写“不确定，需要补充上下文”。\n最后补一句：本结果仅作为第一轮筛查建议，人类保留最终合并与发布决策权。\n\n");
+    out.push_str("输出约束:\n请严格按照以下格式输出你的 Review 结果：\n1. 高风险问题（优先展示漏洞、业务逻辑错误、并发/事务/安全问题，每个问题给出文件/函数定位、危险原因、触发场景、修复建议）\n2. 中风险问题（架构破坏、分层违规、严重性能隐患等）\n3. 低风险优化建议（仅包含高价值优化，忽略纯格式、命名风格、“考虑抽离个函数”等无关紧要的重构废话）\n4. 缺失的测试场景（正常/异常/边界未覆盖的情况）\n5. 总结结论（如果没有明显问题，明确说明“未发现高风险问题”）\n");
+    if matches!(args.mode, crate::cli::ReviewMode::Critical) {
+        out.push_str("6. 风险影响面（必须列出兼容性、迁移、联调、上下游影响）\n7. 发布建议 / 人工确认项（必须列出灰度、回滚、人工确认建议）\n");
+    }
+    out.push_str("证据不足时明确写“不确定，需要补充上下文”。\n最后补一句：本结果仅作为第一轮筛查建议，人类保留最终合并与发布决策权。\n\n");
 
     if let Some(diff) = diff {
         out.push_str("## Diff\n```diff\n");
@@ -232,10 +231,9 @@ pub fn print_template(format: OutputFormat) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn validate_scores() {
-        let args = PromptArgs {
-            mode: crate::cli::ReviewMode::Standard,
+    fn sample_args(mode: crate::cli::ReviewMode) -> PromptArgs {
+        PromptArgs {
+            mode,
             stack: Some("Rust".into()),
             goal: Some("fix".into()),
             why: None,
@@ -255,11 +253,28 @@ mod tests {
             files: vec![],
             focus: vec![],
             baseline_files: vec![],
-            change_type: None,
+            change_type: Some("db".into()),
             format: OutputFormat::Text,
-        };
+        }
+    }
+
+    #[test]
+    fn validate_scores() {
+        let args = sample_args(crate::cli::ReviewMode::Standard);
         let result = validate_args(&args, true, false);
         assert!(result.ok);
         assert!(result.missing_required.iter().any(|m| m == "expected_behavior" || m == "context" || m == "issue" || m == "test_results"));
+    }
+
+    #[test]
+    fn prompt_contains_layer_sections() {
+        let args = sample_args(crate::cli::ReviewMode::Critical);
+        let prompt = build_prompt_from_sources(&args, None, ContextCollection::default()).unwrap();
+        assert!(prompt.contains("四层审查要求"));
+        assert!(prompt.contains("基础层"));
+        assert!(prompt.contains("工程层"));
+        assert!(prompt.contains("业务层"));
+        assert!(prompt.contains("风险层"));
+        assert!(prompt.contains("风险影响面"));
     }
 }

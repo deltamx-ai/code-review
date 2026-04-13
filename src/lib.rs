@@ -8,6 +8,7 @@ pub mod gitops;
 pub mod jira;
 pub mod models;
 pub mod prompt;
+pub mod review_layers;
 pub mod review_parser;
 pub mod review_render;
 pub mod review_schema;
