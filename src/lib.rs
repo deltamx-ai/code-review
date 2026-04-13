@@ -12,6 +12,7 @@ pub mod review_layers;
 pub mod review_parser;
 pub mod review_render;
 pub mod review_schema;
+pub mod review_validate;
 pub mod risk;
 pub mod session;
 
