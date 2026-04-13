@@ -34,7 +34,23 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCommand {
+    Init {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     Login(LoginArgs),
+    Models {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    SelectModel {
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        index: Option<usize>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     Status {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,

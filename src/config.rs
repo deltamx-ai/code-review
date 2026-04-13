@@ -65,6 +65,17 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".config/code-review/config.toml"))
 }
 
+pub fn save_config(cfg: &AppConfig) -> Result<PathBuf> {
+    let path = default_config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config dir {}", parent.display()))?;
+    }
+    let text = toml::to_string_pretty(cfg).context("failed to serialize config")?;
+    fs::write(&path, text).with_context(|| format!("failed to write config {}", path.display()))?;
+    Ok(path)
+}
+
 pub fn apply_config_defaults(args: &mut PromptArgs, cfg: &AppConfig) {
     if args.stack.is_none() {
         args.stack = None;

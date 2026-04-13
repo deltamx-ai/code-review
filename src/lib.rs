@@ -151,14 +151,66 @@ pub fn run() -> Result<()> {
             validation.print(args.format)?;
         }
         Commands::Auth { command } => match command {
+            AuthCommand::Init { format } => {
+                let status = copilot::status(&store)?;
+                if !status.logged_in {
+                    let args = cli::LoginArgs { host: "https://github.com".into(), no_open: false };
+                    let _ = copilot::login(&args, &store)?;
+                }
+                let models = models::list_models(&cfg);
+                println!("Config path: {}", config::default_config_path()?.display());
+                println!("Available models:");
+                for (idx, model) in models.models.iter().enumerate() {
+                    println!("{}. {}", idx + 1, model);
+                }
+                println!("Run `code-review auth select-model --index <n>` to save your default model.");
+                let status = copilot::status(&store)?;
+                status.print(format)?;
+            }
             AuthCommand::Login(args) => {
                 let record = copilot::login(&args, &store)?;
                 println!("Logged in via {}.", record.provider_source);
                 println!("Session saved at {}", store.path().display());
             }
+            AuthCommand::Models { format } => {
+                let models = models::list_models(&cfg);
+                models.print(format)?;
+            }
+            AuthCommand::SelectModel { model, index, format } => {
+                let mut cfg = cfg.clone();
+                let models = models::list_models(&cfg);
+                let chosen = if let Some(model) = model {
+                    model
+                } else if let Some(index) = index {
+                    if index == 0 || index > models.models.len() {
+                        bail!("model index out of range");
+                    }
+                    models.models[index - 1].clone()
+                } else {
+                    bail!("provide --model or --index");
+                };
+                cfg.llm.model = Some(chosen.clone());
+                if cfg.llm.provider.is_none() {
+                    cfg.llm.provider = Some("copilot".into());
+                }
+                let path = config::save_config(&cfg)?;
+                match format {
+                    cli::OutputFormat::Text => {
+                        println!("selected_model: {}", chosen);
+                        println!("config: {}", path.display());
+                    }
+                    cli::OutputFormat::Json => {
+                        println!("{}", serde_json::json!({"selected_model": chosen, "config": path.display().to_string() }));
+                    }
+                }
+            }
             AuthCommand::Status { format } => {
                 let status = copilot::status(&store)?;
                 status.print(format)?;
+                if let Some(model) = &cfg.llm.model {
+                    println!("default_model: {}", model);
+                }
+                println!("config: {}", config::default_config_path()?.display());
             }
             AuthCommand::Logout { clear_remote } => {
                 copilot::logout(&store, clear_remote)?;

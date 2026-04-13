@@ -95,6 +95,21 @@ context_file_max_bytes = 12000
 code-review auth login
 ```
 
+### 初始化认证与默认模型
+
+推荐第一次直接走：
+
+```bash
+code-review auth init
+```
+
+它会：
+- 检查当前登录状态
+- 如果未登录则先触发登录
+- 列出可用模型
+- 提示你下一步用 `auth select-model` 保存默认模型
+- 显示最终状态
+
 ### 查看状态
 
 ```bash
@@ -106,8 +121,16 @@ code-review auth refresh
 ### 查看可用模型
 
 ```bash
-code-review models
-code-review models --format json
+code-review auth models
+code-review auth models --format json
+```
+
+### 选择默认模型并写入配置
+
+```bash
+code-review auth select-model --index 1
+# 或
+code-review auth select-model --model gpt-5.4
 ```
 
 ### 登出
@@ -183,6 +206,8 @@ code-review run \
 ```
 
 ### 执行真实 review
+
+如果配置文件里已经设了默认模型，`review` 和 `deep-review` 会自动使用，不需要每次传 `--model`。
 
 ```bash
 code-review review --prompt "请审查下面的变更，重点看边界条件、错误处理、并发和事务一致性。"
