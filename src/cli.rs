@@ -13,6 +13,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Prompt(PromptArgs),
+    Assemble(PromptArgs),
     Run(RunArgs),
     Auth {
         #[command(subcommand)]
@@ -55,7 +56,7 @@ pub struct LoginArgs {
     pub no_open: bool,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, serde::Serialize)]
 pub struct PromptArgs {
     #[arg(long)]
     pub stack: Option<String>,
@@ -78,6 +79,14 @@ pub struct PromptArgs {
     #[arg(long = "test-result")]
     pub test_results: Vec<String>,
     #[arg(long)]
+    pub jira: Option<String>,
+    #[arg(long = "jira-base-url")]
+    pub jira_base_url: Option<String>,
+    #[arg(long = "jira-provider", default_value = "native")]
+    pub jira_provider: String,
+    #[arg(long = "jira-command")]
+    pub jira_command: Option<String>,
+    #[arg(long)]
     pub diff_file: Option<PathBuf>,
     #[arg(long = "context-file")]
     pub context_files: Vec<PathBuf>,
@@ -91,7 +100,7 @@ pub struct PromptArgs {
     pub format: OutputFormat,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, serde::Serialize)]
 pub struct RunArgs {
     #[arg(long)]
     pub git: String,
@@ -120,6 +129,10 @@ impl RunArgs {
             expected_edge: self.prompt.expected_edge.clone(),
             issue: self.prompt.issue.clone(),
             test_results: self.prompt.test_results.clone(),
+            jira: self.prompt.jira.clone(),
+            jira_base_url: self.prompt.jira_base_url.clone(),
+            jira_provider: self.prompt.jira_provider.clone(),
+            jira_command: self.prompt.jira_command.clone(),
             diff_file: self.prompt.diff_file.clone(),
             context_files: self.prompt.context_files.clone(),
             files,
@@ -152,6 +165,7 @@ impl ReviewArgs {
             || self.prompt_args.expected_edge.is_some()
             || self.prompt_args.issue.is_some()
             || !self.prompt_args.test_results.is_empty()
+            || self.prompt_args.jira.is_some()
             || self.prompt_args.diff_file.is_some()
             || !self.prompt_args.context_files.is_empty()
             || !self.prompt_args.files.is_empty()

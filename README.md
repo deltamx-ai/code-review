@@ -96,6 +96,39 @@ code-review prompt \
   --diff-file /tmp/change.diff
 ```
 
+### 预览 Jira / 自动装配结果
+
+```bash
+code-review assemble \
+  --jira PROJ-123 \
+  --jira-base-url https://your-company.atlassian.net
+```
+
+如果你想接自己的脚本、lib 或 opencli，当成 provider 用：
+
+```bash
+code-review assemble \
+  --jira PROJ-123 \
+  --jira-provider command \
+  --jira-command 'my-jira-fetcher "{issue}"'
+```
+
+外部命令需要输出 JSON，例如：
+
+```json
+{
+  "key": "PROJ-123",
+  "summary": "修复重复下单",
+  "description": "支付接口在网络重试下出现重复创建订单",
+  "acceptance": ["一个订单只能支付一次", "重复提交返回冲突"],
+  "comments": ["QA: 正常下单已通过", "测试: 幂等重试场景待补"],
+  "labels": ["backend", "payment"],
+  "components": ["order-service"],
+  "issue_type": "Bug",
+  "priority": "High"
+}
+```
+
 ### 从 git diff 自动生成
 
 ```bash
@@ -103,10 +136,8 @@ code-review run \
   --repo . \
   --git HEAD~1..HEAD \
   --include-context \
-  --stack "Rust + Axum + PostgreSQL" \
-  --goal "修复重复下单" \
-  --rule "一个订单只能支付一次" \
-  --expected-normal "首次提交成功"
+  --jira PROJ-123 \
+  --stack "Rust + Axum + PostgreSQL"
 ```
 
 ### 执行真实 review

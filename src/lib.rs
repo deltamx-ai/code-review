@@ -2,12 +2,14 @@ pub mod cli;
 pub mod context;
 pub mod copilot;
 pub mod gitops;
+pub mod jira;
 pub mod prompt;
 pub mod session;
 
 use anyhow::{bail, Result};
 use clap::Parser;
 use cli::{AuthCommand, Cli, Commands};
+use jira::{enrich_prompt_args, maybe_expand_context_files};
 use prompt::{
     build_prompt, build_prompt_from_sources, print_template, validate_args, PromptOutput,
     PromptSummary,
@@ -19,7 +21,10 @@ pub fn run() -> Result<()> {
     let store = SessionStore::new_default()?;
 
     match cli.command {
-        Commands::Prompt(args) => {
+        Commands::Prompt(mut args) => {
+            let repo_files = args.files.clone();
+            enrich_prompt_args(&mut args, &repo_files)?;
+            maybe_expand_context_files(&mut args, &repo_files);
             let validation = validate_args(
                 &args,
                 args.diff_file.is_some(),
@@ -33,6 +38,12 @@ pub fn run() -> Result<()> {
                 prompt,
                 PromptSummary::from_prompt_args(&args),
             )?;
+        }
+        Commands::Assemble(mut args) => {
+            let repo_files = args.files.clone();
+            enrich_prompt_args(&mut args, &repo_files)?;
+            maybe_expand_context_files(&mut args, &repo_files);
+            println!("{}", serde_json::to_string_pretty(&args)?);
         }
         Commands::Run(args) => {
             gitops::ensure_git_repo(&args.repo)?;
@@ -51,7 +62,23 @@ pub fn run() -> Result<()> {
             } else {
                 context::ContextCollection::default()
             };
-            let prompt_args = args.to_prompt_args(files.clone());
+            let mut prompt_args = args.to_prompt_args(files.clone());
+            enrich_prompt_args(&mut prompt_args, &files)?;
+            maybe_expand_context_files(&mut prompt_args, &files);
+            let contexts = if args.include_context {
+                context::read_repo_context_with_budget(
+                    &args.repo,
+                    &prompt_args
+                        .context_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>(),
+                    args.context_budget_bytes,
+                    args.context_file_max_bytes,
+                )?
+            } else {
+                contexts
+            };
             let validation = validate_args(
                 &prompt_args,
                 true,
@@ -67,7 +94,9 @@ pub fn run() -> Result<()> {
             )?;
         }
         Commands::Template { format } => print_template(format)?,
-        Commands::Validate(args) => {
+        Commands::Validate(mut args) => {
+            let repo_files = args.files.clone();
+            jira::enrich_prompt_args(&mut args, &repo_files)?;
             let validation = validate_args(
                 &args,
                 args.diff_file.is_some(),
@@ -105,7 +134,10 @@ pub fn run() -> Result<()> {
             }
             let prompt = if let Some(prompt) = args.prompt.clone() {
                 prompt
-            } else if let Some(prompt_args) = args.to_prompt_args() {
+            } else if let Some(mut prompt_args) = args.to_prompt_args() {
+                let repo_files = prompt_args.files.clone();
+                enrich_prompt_args(&mut prompt_args, &repo_files)?;
+                maybe_expand_context_files(&mut prompt_args, &repo_files);
                 let validation = validate_args(
                     &prompt_args,
                     prompt_args.diff_file.is_some(),
