@@ -1,5 +1,6 @@
 use crate::admission::{AdmissionLevel, ReviewConfidence};
 use crate::cli::ReviewMode;
+use crate::review_validate::ReviewValidationReport;
 use crate::risk::RiskAnalysis;
 use serde::Serialize;
 
@@ -44,6 +45,9 @@ pub struct ReviewResult {
     pub impact_scope: Vec<String>,
     pub release_checks: Vec<String>,
     pub risk_hints: Vec<RiskHintView>,
+    pub validation_report: Option<ReviewValidationReport>,
+    pub repair_attempted: bool,
+    pub repair_succeeded: bool,
     pub raw_text: String,
 }
 
@@ -81,6 +85,10 @@ impl ReviewResult {
                 source: hint.source,
             });
         }
+    }
+
+    pub fn apply_validation_report(&mut self, report: ReviewValidationReport) {
+        self.validation_report = Some(report);
     }
 
     pub fn finalize(&mut self) {

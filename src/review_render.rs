@@ -6,7 +6,19 @@ pub fn render_review_result_text(result: &ReviewResult) -> String {
     out.push_str(&format!("input_ok: {}\n", result.input_ok));
     out.push_str(&format!("input_level: {}\n", result.input_level));
     out.push_str(&format!("input_score: {}\n", result.input_score));
-    out.push_str(&format!("confidence: {}\n\n", result.confidence));
+    out.push_str(&format!("confidence: {}\n", result.confidence));
+    out.push_str(&format!("repair_attempted: {}\n", result.repair_attempted));
+    out.push_str(&format!("repair_succeeded: {}\n\n", result.repair_succeeded));
+
+    if let Some(report) = &result.validation_report {
+        out.push_str("validation_report:\n");
+        out.push_str(&format!("  ok: {}\n", report.ok));
+        out.push_str(&format!("  repaired: {}\n", report.repaired));
+        for finding in &report.findings {
+            out.push_str(&format!("  - [{:?}] {}: {}\n", finding.severity, finding.field, finding.message));
+        }
+        out.push('\n');
+    }
 
     render_issue_block(&mut out, "1. 高风险问题", &result.high_risk);
     render_issue_block(&mut out, "2. 中风险问题", &result.medium_risk);

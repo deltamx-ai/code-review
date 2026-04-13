@@ -27,6 +27,7 @@ use prompt::{
 };
 use review_parser::parse_review_text;
 use review_render::render_review_result_text;
+use review_validate::validate_and_repair_review_result;
 use risk::analyze_risks;
 use regex::Regex;
 use session::SessionStore;
@@ -283,6 +284,27 @@ pub fn run() -> Result<()> {
                 let risk_analysis = analyze_risks(&prompt_args, &changed_files, None);
                 parsed.apply_risk_analysis(risk_analysis);
                 parsed.finalize();
+                let report = validate_and_repair_review_result(mode, &mut parsed);
+                parsed.apply_validation_report(report.clone());
+                if !report.ok {
+                    parsed.repair_attempted = true;
+                    let repaired_prompt = build_repair_prompt(&response, mode);
+                    if let Ok(repaired_text) = copilot::run_review(&store, &repaired_prompt, args.model.as_deref()) {
+                        let mut repaired = parse_review_text(mode, &repaired_text, prompt_args.rules.clone());
+                        if let Some(admission) = check_admission_for_prompt_args(&prompt_args) {
+                            repaired.apply_admission(admission.ok, admission.level, admission.score, admission.confidence);
+                        }
+                        repaired.apply_risk_analysis(analyze_risks(&prompt_args, &changed_files, None));
+                        repaired.finalize();
+                        let second_report = validate_and_repair_review_result(mode, &mut repaired);
+                        repaired.apply_validation_report(second_report.clone());
+                        repaired.repair_attempted = true;
+                        repaired.repair_succeeded = second_report.ok;
+                        if second_report.ok {
+                            parsed = repaired;
+                        }
+                    }
+                }
             }
             match args.prompt_args.format {
                 cli::OutputFormat::Text => println!("{}", render_review_result_text(&parsed)),
@@ -391,6 +413,8 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
     );
     stage1_parsed.apply_risk_analysis(analyze_risks(&prompt_args, &changed_files, Some(&diff)));
     stage1_parsed.finalize();
+    let stage1_report = validate_and_repair_review_result(prompt_args.mode, &mut stage1_parsed);
+    stage1_parsed.apply_validation_report(stage1_report);
 
     let (stage2_files, stage2_hints) = extract_stage2_focus(&stage1_output);
     let mut stage2_args = prompt_args.clone();
@@ -438,6 +462,30 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
     );
     stage2_parsed.apply_risk_analysis(analyze_risks(&stage2_args, &stage2_args.files, None));
     stage2_parsed.finalize();
+    let stage2_report = validate_and_repair_review_result(stage2_args.mode, &mut stage2_parsed);
+    stage2_parsed.apply_validation_report(stage2_report.clone());
+    if !stage2_report.ok {
+        stage2_parsed.repair_attempted = true;
+        let repaired_prompt = build_repair_prompt(&stage2_output, stage2_args.mode);
+        if let Ok(repaired_text) = copilot::run_review(store, &repaired_prompt, args.model.as_deref()) {
+            let mut repaired = parse_review_text(stage2_args.mode, &repaired_text, stage2_args.rules.clone());
+            repaired.apply_admission(
+                stage1_admission.ok,
+                stage1_admission.level,
+                stage1_admission.score,
+                stage1_admission.confidence,
+            );
+            repaired.apply_risk_analysis(analyze_risks(&stage2_args, &stage2_args.files, None));
+            repaired.finalize();
+            let second_report = validate_and_repair_review_result(stage2_args.mode, &mut repaired);
+            repaired.apply_validation_report(second_report.clone());
+            repaired.repair_attempted = true;
+            repaired.repair_succeeded = second_report.ok;
+            if second_report.ok {
+                stage2_parsed = repaired;
+            }
+        }
+    }
 
     match args.prompt.format {
         cli::OutputFormat::Text => {
@@ -455,6 +503,26 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
         }
     }
     Ok(())
+}
+
+fn build_repair_prompt(raw_output: &str, mode: cli::ReviewMode) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("请把下面这份 code review 结果修复为更严格的结构化输出，不要新增无根据结论，只重排和补齐格式。\n");
+    prompt.push_str("必须包含：\n1. 高风险问题\n2. 中风险问题\n3. 低风险优化建议\n4. 缺失的测试场景\n5. 总结结论\n");
+    if matches!(mode, cli::ReviewMode::Critical) {
+        prompt.push_str("6. 风险影响面\n7. 发布建议 / 人工确认项\n");
+    }
+    prompt.push_str("每个风险问题尽量包含：文件/位置、原因、触发条件、影响、建议。证据不足就写“不确定，需要补充上下文”。\n\n原始输出如下：\n");
+    prompt.push_str(raw_output);
+    prompt
+}
+
+fn check_admission_for_prompt_args(args: &cli::PromptArgs) -> Option<admission::AdmissionResult> {
+    Some(check_admission(
+        args,
+        args.diff_file.is_some(),
+        !args.context_files.is_empty() || !args.files.is_empty(),
+    ))
 }
 
 fn output_prompt(

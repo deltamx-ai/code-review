@@ -12,4 +12,7 @@
 - [x] 把 schema/parser 接到 review / deep-review 输出
 - [x] 实现 review_layers.rs 四层审查抽象
 - [x] 实现 risk.rs 风险分析器雏形并接入 prompt / review 输出
+- [x] 提交并推送当前改动
+- [x] 实现 result validation / repair 雏形
+- [x] 显式输出 validation_report / repair 状态
 - [ ] ~提交并推送当前改动~ *(in progress)*

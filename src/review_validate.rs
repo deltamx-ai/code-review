@@ -142,4 +142,13 @@ mod tests {
         assert!(report.findings.iter().any(|f| f.field == "impact_scope"));
         assert!(report.findings.iter().any(|f| f.field == "release_checks"));
     }
+
+    #[test]
+    fn report_can_be_attached_to_result() {
+        let mut result = ReviewResult::new(ReviewMode::Standard, "raw".into());
+        let report = validate_and_repair_review_result(ReviewMode::Standard, &mut result);
+        result.apply_validation_report(report.clone());
+        assert!(result.validation_report.is_some());
+        assert_eq!(result.validation_report.unwrap().ok, report.ok);
+    }
 }
