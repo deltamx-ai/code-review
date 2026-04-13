@@ -18,8 +18,6 @@ pub struct AppConfig {
 pub struct LlmConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -111,7 +109,6 @@ mod tests {
 [llm]
 provider = "copilot"
 model = "gpt-5.4"
-models = ["gpt-5.4", "opus"]
 
 [jira]
 provider = "native"

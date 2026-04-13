@@ -135,7 +135,7 @@ pub fn run() -> Result<()> {
             run_deep_review(&store, args)?;
         }
         Commands::Models { format } => {
-            let models = models::list_models(&cfg);
+            let models = models::list_models(&cfg)?;
             models.print(format)?;
         }
         Commands::Template { format } => print_template(format)?,
@@ -157,12 +157,9 @@ pub fn run() -> Result<()> {
                     let args = cli::LoginArgs { host: "https://github.com".into(), no_open: false };
                     let _ = copilot::login(&args, &store)?;
                 }
-                let models = models::list_models(&cfg);
+                let models = models::list_models(&cfg)?;
                 println!("Config path: {}", config::default_config_path()?.display());
-                println!("Available models:");
-                for (idx, model) in models.models.iter().enumerate() {
-                    println!("{}. {}", idx + 1, model);
-                }
+                models.print(cli::OutputFormat::Text)?;
                 println!("Run `code-review auth select-model --index <n>` to save your default model.");
                 let status = copilot::status(&store)?;
                 status.print(format)?;
@@ -173,12 +170,12 @@ pub fn run() -> Result<()> {
                 println!("Session saved at {}", store.path().display());
             }
             AuthCommand::Models { format } => {
-                let models = models::list_models(&cfg);
+                let models = models::list_models(&cfg)?;
                 models.print(format)?;
             }
             AuthCommand::SelectModel { model, index, format } => {
                 let mut cfg = cfg.clone();
-                let models = models::list_models(&cfg);
+                let models = models::list_models(&cfg)?;
                 let chosen = if let Some(model) = model {
                     model
                 } else if let Some(index) = index {

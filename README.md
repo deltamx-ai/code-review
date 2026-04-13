@@ -125,6 +125,8 @@ code-review auth models
 code-review auth models --format json
 ```
 
+这里的模型列表来自 GitHub 官方模型页面，不再从本地配置文件读取。配置文件只保存你最终选中的默认模型。
+
 ### 选择默认模型并写入配置
 
 ```bash
