@@ -1,8 +1,8 @@
-use crate::cli::{DeepReviewArgs, PromptArgs, ReviewArgs, RunArgs};
+use crate::cli::{AnalyzeArgs, DeepReviewArgs, PromptArgs, ReviewArgs, RunArgs};
 use crate::config::load_config;
 use crate::models;
 use crate::services::review_service::{
-    execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
+    execute_analyze, execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
     execute_validate,
 };
 use crate::session::SessionStore;
@@ -46,6 +46,7 @@ pub fn app(state: ApiState) -> Router {
         .route("/api/prompt", post(prompt_handler))
         .route("/api/assemble", post(assemble_handler))
         .route("/api/run", post(run_handler))
+        .route("/api/analyze", post(analyze_handler))
         .route("/api/review", post(review_handler))
         .route("/api/deep-review", post(deep_review_handler))
         .layer(CorsLayer::permissive())
@@ -113,6 +114,41 @@ async fn run_handler(Json(req): Json<RunArgs>) -> Result<Json<crate::prompt::Pro
         score: execution.score,
         prompt: execution.prompt,
         summary: execution.summary,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnalyzeApiResponse {
+    pub strategy: String,
+    pub admission: crate::admission::AdmissionResult,
+    pub prompt: crate::prompt::PromptOutput,
+    pub review: Option<crate::review_schema::ReviewResult>,
+    pub stage1: Option<crate::review_schema::ReviewResult>,
+    pub stage2: Option<crate::review_schema::ReviewResult>,
+    pub exit_code: i32,
+}
+
+async fn analyze_handler(
+    State(state): State<ApiState>,
+    Json(mut req): Json<AnalyzeArgs>,
+) -> Result<Json<AnalyzeApiResponse>, ApiError> {
+    if req.model.is_none() {
+        req.model = state.cfg.llm.model.clone();
+    }
+    let store = state.store.clone();
+    let cfg_default_model = state.cfg.llm.model.clone();
+    let execution = task::spawn_blocking(move || execute_analyze(&store, cfg_default_model, &req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("analyze task join error: {}", e)))?
+        .map_err(api_error)?;
+    Ok(Json(AnalyzeApiResponse {
+        strategy: execution.strategy,
+        admission: execution.admission,
+        prompt: execution.prompt,
+        review: execution.review,
+        stage1: execution.stage1,
+        stage2: execution.stage2,
+        exit_code: execution.exit_code,
     }))
 }
 

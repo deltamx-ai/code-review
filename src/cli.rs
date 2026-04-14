@@ -15,6 +15,7 @@ pub enum Commands {
     Prompt(PromptArgs),
     Assemble(PromptArgs),
     Run(RunArgs),
+    Analyze(AnalyzeArgs),
     DeepReview(DeepReviewArgs),
     Serve(ServeArgs),
     Models {
@@ -181,6 +182,58 @@ impl RunArgs {
             baseline_files: self.prompt.baseline_files.clone(),
             change_type: self.prompt.change_type.clone(),
             format: self.prompt.format,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnalyzeStrategy {
+    Standard,
+    Deep,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnalyzeArgs {
+    #[arg(long)]
+    pub git: String,
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long, value_enum, default_value_t = AnalyzeStrategy::Deep)]
+    pub strategy: AnalyzeStrategy,
+    #[command(flatten)]
+    pub prompt: PromptArgs,
+    #[arg(long, default_value_t = true)]
+    pub include_context: bool,
+    #[arg(long, default_value_t = 48_000)]
+    pub context_budget_bytes: usize,
+    #[arg(long, default_value_t = 12_000)]
+    pub context_file_max_bytes: usize,
+}
+
+impl AnalyzeArgs {
+    pub fn to_run_args(&self) -> RunArgs {
+        RunArgs {
+            git: self.git.clone(),
+            repo: self.repo.clone(),
+            prompt: self.prompt.clone(),
+            include_context: self.include_context,
+            context_budget_bytes: self.context_budget_bytes,
+            context_file_max_bytes: self.context_file_max_bytes,
+        }
+    }
+
+    pub fn to_deep_review_args(&self) -> DeepReviewArgs {
+        DeepReviewArgs {
+            git: self.git.clone(),
+            repo: self.repo.clone(),
+            model: self.model.clone(),
+            prompt: self.prompt.clone(),
+            include_context: self.include_context,
+            context_budget_bytes: self.context_budget_bytes,
+            context_file_max_bytes: self.context_file_max_bytes,
         }
     }
 }

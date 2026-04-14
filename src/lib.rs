@@ -24,8 +24,8 @@ use cli::{AuthCommand, Cli, Commands};
 use config::load_config;
 use prompt::print_template;
 use services::review_service::{
-    execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
-    execute_validate, render_assemble_execution, render_deep_review_execution,
+    execute_analyze, execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
+    execute_validate, render_analyze_execution, render_assemble_execution, render_deep_review_execution,
     render_prompt_execution, render_review_execution, render_validate_execution,
 };
 use session::SessionStore;
@@ -62,6 +62,26 @@ pub fn run() -> Result<i32> {
             }
             let execution = execute_run(&args)?;
             render_prompt_execution(args.prompt.format, &execution)?;
+            return Ok(execution.exit_code);
+        }
+        Commands::Analyze(mut args) => {
+            config::apply_config_defaults(&mut args.prompt, &cfg);
+            if args.model.is_none() {
+                args.model = cfg.llm.model.clone();
+            }
+            if let Some(include_context) = cfg.review.include_context {
+                if !args.include_context {
+                    args.include_context = include_context;
+                }
+            }
+            if args.context_budget_bytes == 48_000 {
+                if let Some(v) = cfg.review.context_budget_bytes { args.context_budget_bytes = v; }
+            }
+            if args.context_file_max_bytes == 12_000 {
+                if let Some(v) = cfg.review.context_file_max_bytes { args.context_file_max_bytes = v; }
+            }
+            let execution = execute_analyze(&store, cfg.llm.model.clone(), &args)?;
+            render_analyze_execution(args.prompt.format, &execution)?;
             return Ok(execution.exit_code);
         }
         Commands::DeepReview(mut args) => {

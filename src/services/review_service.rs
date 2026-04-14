@@ -1,5 +1,5 @@
 use crate::admission::{check_admission, AdmissionResult};
-use crate::cli::{DeepReviewArgs, OutputFormat, PromptArgs, ReviewArgs, ReviewMode, RunArgs};
+use crate::cli::{AnalyzeArgs, AnalyzeStrategy, DeepReviewArgs, OutputFormat, PromptArgs, ReviewArgs, ReviewMode, RunArgs};
 use crate::context;
 use crate::copilot;
 use crate::gitops;
@@ -41,6 +41,16 @@ pub struct AssembleExecution {
 
 pub struct ValidateExecution {
     pub admission: AdmissionResult,
+    pub exit_code: i32,
+}
+
+pub struct AnalyzeExecution {
+    pub strategy: String,
+    pub admission: AdmissionResult,
+    pub prompt: crate::prompt::PromptOutput,
+    pub review: Option<ReviewResult>,
+    pub stage1: Option<ReviewResult>,
+    pub stage2: Option<ReviewResult>,
     pub exit_code: i32,
 }
 
@@ -87,6 +97,79 @@ pub fn execute_validate(args: &PromptArgs) -> Result<ValidateExecution> {
 }
 
 pub fn execute_run(args: &RunArgs) -> Result<PromptExecution> {
+    let (prompt_args, diff, contexts, admission) = prepare_run_prompt(args)?;
+    let prompt = build_prompt_from_sources(&prompt_args, Some(diff), contexts)?;
+    Ok(PromptExecution {
+        prompt,
+        score: admission.score,
+        ok: admission.ok,
+        summary: crate::prompt::PromptSummary::from_prompt_args(&prompt_args),
+        exit_code: if admission.ok { 0 } else { 3 },
+    })
+}
+
+pub fn execute_analyze(
+    store: &SessionStore,
+    cfg_default_model: Option<String>,
+    args: &AnalyzeArgs,
+) -> Result<AnalyzeExecution> {
+    let run_args = args.to_run_args();
+    let prompt_execution = execute_run(&run_args)?;
+    let assembled = execute_assemble(&run_args.prompt)?;
+    let admission = check_admission(
+        &assembled.prompt_args,
+        assembled.prompt_args.diff_file.is_some() || !prompt_execution.summary.files.is_empty(),
+        !assembled.prompt_args.context_files.is_empty() || !assembled.prompt_args.files.is_empty(),
+    );
+
+    match args.strategy {
+        AnalyzeStrategy::Standard => {
+            let mut review_args = ReviewArgs {
+                prompt: Some(prompt_execution.prompt.clone()),
+                model: args.model.clone().or(cfg_default_model),
+                prompt_args: assembled.prompt_args.clone(),
+            };
+            let review = execute_review(store, review_args.model.clone(), &mut review_args)?;
+            Ok(AnalyzeExecution {
+                strategy: "standard".into(),
+                admission,
+                prompt: crate::prompt::PromptOutput {
+                    ok: prompt_execution.ok,
+                    score: prompt_execution.score,
+                    prompt: prompt_execution.prompt,
+                    summary: prompt_execution.summary,
+                },
+                review: Some(review.result),
+                stage1: None,
+                stage2: None,
+                exit_code: review.exit_code,
+            })
+        }
+        AnalyzeStrategy::Deep => {
+            let mut deep_args = args.to_deep_review_args();
+            if deep_args.model.is_none() {
+                deep_args.model = cfg_default_model;
+            }
+            let deep = execute_deep_review(store, &deep_args)?;
+            Ok(AnalyzeExecution {
+                strategy: "deep".into(),
+                admission,
+                prompt: crate::prompt::PromptOutput {
+                    ok: prompt_execution.ok,
+                    score: prompt_execution.score,
+                    prompt: prompt_execution.prompt,
+                    summary: prompt_execution.summary,
+                },
+                review: None,
+                stage1: Some(deep.stage1),
+                stage2: Some(deep.stage2),
+                exit_code: deep.exit_code,
+            })
+        }
+    }
+}
+
+fn prepare_run_prompt(args: &RunArgs) -> Result<(PromptArgs, String, context::ContextCollection, AdmissionResult)> {
     gitops::ensure_git_repo(&args.repo)?;
     let diff = gitops::git_diff(&args.repo, &args.git)?;
     if diff.trim().is_empty() {
@@ -126,14 +209,8 @@ pub fn execute_run(args: &RunArgs) -> Result<PromptExecution> {
         true,
         !contexts.files.is_empty() || !files.is_empty(),
     );
-    let prompt = build_prompt_from_sources(&prompt_args, Some(diff), contexts)?;
-    Ok(PromptExecution {
-        prompt,
-        score: admission.score,
-        ok: admission.ok,
-        summary: crate::prompt::PromptSummary::from_prompt_args(&prompt_args),
-        exit_code: if admission.ok { 0 } else { 3 },
-    })
+
+    Ok((prompt_args, diff, contexts, admission))
 }
 
 pub fn execute_review(
@@ -374,6 +451,44 @@ pub fn render_deep_review_execution(format: OutputFormat, execution: &DeepReview
                     "stage2": execution.stage2
                 }))?
             );
+        }
+    }
+    Ok(())
+}
+
+pub fn render_analyze_execution(format: OutputFormat, execution: &AnalyzeExecution) -> Result<()> {
+    match format {
+        OutputFormat::Text => {
+            println!("strategy: {}", execution.strategy);
+            println!("admission_ok: {}", execution.admission.ok);
+            println!("admission_score: {}", execution.admission.score);
+            println!("\n## Prompt Summary");
+            println!("prompt_ok: {}", execution.prompt.ok);
+            println!("prompt_score: {}", execution.prompt.score);
+            println!("files: {}", execution.prompt.summary.files.join(", "));
+            if let Some(review) = &execution.review {
+                println!("\n## Review");
+                println!("{}", render_review_result_text(review));
+            }
+            if let Some(stage1) = &execution.stage1 {
+                println!("\n## Stage 1 Review");
+                println!("{}", render_review_result_text(stage1));
+            }
+            if let Some(stage2) = &execution.stage2 {
+                println!("\n## Stage 2 Review");
+                println!("{}", render_review_result_text(stage2));
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "strategy": execution.strategy,
+                "admission": execution.admission,
+                "prompt": execution.prompt,
+                "review": execution.review,
+                "stage1": execution.stage1,
+                "stage2": execution.stage2,
+                "exit_code": execution.exit_code,
+            }))?);
         }
     }
     Ok(())
