@@ -10,6 +10,7 @@ use wait_timeout::ChildExt;
 #[derive(Debug, Serialize)]
 pub struct AuthStatus {
     pub logged_in: bool,
+    pub quota_exhausted: bool,
     pub provider_source: Option<String>,
     pub user: Option<String>,
     pub host: Option<String>,
@@ -24,6 +25,7 @@ impl AuthStatus {
         match format {
             OutputFormat::Text => {
                 println!("logged_in: {}", self.logged_in);
+                println!("quota_exhausted: {}", self.quota_exhausted);
                 if let Some(v) = &self.user { println!("user: {}", v); }
                 if let Some(v) = &self.provider_source { println!("provider: {}", v); }
                 if let Some(v) = &self.host { println!("host: {}", v); }
@@ -75,6 +77,7 @@ pub fn login(args: &LoginArgs, store: &SessionStore) -> Result<SessionRecord> {
     if !status.success() {
         let probe = run_probe().unwrap_or(ProbeResult {
             logged_in: false,
+            quota_exhausted: false,
             last_error: Some(format!("login failed with status: {}", status)),
         });
         if !probe.logged_in {
@@ -84,7 +87,7 @@ pub fn login(args: &LoginArgs, store: &SessionStore) -> Result<SessionRecord> {
 
     let probe = run_probe()?;
     if !probe.logged_in {
-        bail!("copilot login completed but probe still failed: {}", probe.last_error.unwrap_or_else(|| "unknown error".into()));
+        bail!("copilot login completed but probe still failed: {}", probe.last_error.clone().unwrap_or_else(|| "unknown error".into()));
     }
 
     let record = SessionRecord {
@@ -119,6 +122,7 @@ pub fn status(store: &SessionStore) -> Result<AuthStatus> {
             store.save(&record)?;
             Ok(AuthStatus {
                 logged_in: probe.logged_in,
+                quota_exhausted: probe.quota_exhausted,
                 provider_source: Some(record.provider_source),
                 user: Some(record.user),
                 host: Some(record.host),
@@ -130,6 +134,7 @@ pub fn status(store: &SessionStore) -> Result<AuthStatus> {
         }
         None => Ok(AuthStatus {
             logged_in: probe.logged_in,
+            quota_exhausted: probe.quota_exhausted,
             provider_source: probe.logged_in.then(|| "copilot-cli".into()),
             user: probe.logged_in.then(discover_user),
             host: probe.logged_in.then(|| "https://github.com".into()),
@@ -193,6 +198,7 @@ pub fn run_review(_store: &SessionStore, prompt: &str, model: Option<&str>) -> R
 #[derive(Debug)]
 struct ProbeResult {
     logged_in: bool,
+    quota_exhausted: bool,
     last_error: Option<String>,
 }
 
@@ -247,8 +253,24 @@ fn run_copilot_prompt_arg(prompt_arg: &str, model: Option<&str>, timeout: Durati
 
 fn run_probe() -> Result<ProbeResult> {
     match run_copilot_prompt_arg("reply with exactly OK", None, Duration::from_secs(20)) {
-        Ok(_) => Ok(ProbeResult { logged_in: true, last_error: None }),
-        Err(err) => Ok(ProbeResult { logged_in: false, last_error: Some(err.to_string()) }),
+        Ok(_) => Ok(ProbeResult {
+            logged_in: true,
+            quota_exhausted: false,
+            last_error: None,
+        }),
+        Err(err) => {
+            let msg = err.to_string();
+            let lower = msg.to_lowercase();
+            let quota_exhausted = lower.contains("402")
+                || lower.contains("no quota")
+                || lower.contains("insufficient quota")
+                || lower.contains("quota exceeded");
+            Ok(ProbeResult {
+                logged_in: quota_exhausted,
+                quota_exhausted,
+                last_error: Some(msg),
+            })
+        }
     }
 }
 
@@ -296,5 +318,13 @@ mod tests {
         let prompt = "a".repeat(9000);
         let arg = build_prompt_arg(&prompt).expect("build prompt arg");
         assert!(arg.starts_with('@'));
+    }
+
+    #[test]
+    fn quota_error_is_treated_as_logged_in() {
+        let msg = "copilot command failed: 402 You have no quota".to_string();
+        let lower = msg.to_lowercase();
+        let quota_exhausted = lower.contains("402") || lower.contains("no quota");
+        assert!(quota_exhausted);
     }
 }

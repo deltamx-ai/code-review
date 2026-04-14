@@ -1,17 +1,21 @@
 openapi: 3.0.3
 info:
   title: code-review HTTP API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Local HTTP API for the code-review service.
     This API wraps the same service-layer flows used by the CLI.
 servers:
   - url: http://127.0.0.1:3000
     description: Local default server
+  - url: http://localhost:3000
+    description: Localhost alias
 paths:
   /api/health:
     get:
       summary: Health check
+      operationId: getHealth
+      tags: [system]
       responses:
         '200':
           description: OK
@@ -19,9 +23,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+              examples:
+                default:
+                  value:
+                    ok: true
+                    service: code-review
   /api/models:
     get:
       summary: List available models
+      operationId: listModels
+      tags: [system]
       responses:
         '200':
           description: Model list
@@ -30,20 +41,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ModelList'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/validate:
     post:
       summary: Validate review input admission
+      operationId: validateReviewInput
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PromptArgs'
+            examples:
+              standard:
+                value:
+                  mode: standard
+                  stack: Rust + Axum + PostgreSQL
+                  goal: 修复重复下单
+                  rules:
+                    - 一个订单只能支付一次
+                    - 幂等键必须生效
+                  files:
+                    - src/order/service.rs
+                  format: json
       responses:
         '200':
           description: Admission result
@@ -52,20 +73,34 @@ paths:
               schema:
                 $ref: '#/components/schemas/AdmissionResult'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/prompt:
     post:
       summary: Build prompt from structured input
+      operationId: buildPrompt
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PromptArgs'
+            examples:
+              standard:
+                value:
+                  mode: standard
+                  stack: Rust + Axum + PostgreSQL
+                  goal: 修复重复下单
+                  why: 线上偶发重复提交
+                  rules:
+                    - 一个订单只能支付一次
+                    - 幂等键必须生效
+                  expected_normal: 首次提交成功
+                  expected_error: 重复提交返回冲突
+                  expected_edge: 网络重试不应双写
+                  files:
+                    - src/order/service.rs
+                  format: json
       responses:
         '200':
           description: Prompt output
@@ -74,20 +109,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/PromptOutput'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/assemble:
     post:
       summary: Assemble prompt args with enrichments
+      operationId: assemblePromptArgs
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PromptArgs'
+            examples:
+              jira:
+                value:
+                  mode: standard
+                  jira: PROJ-123
+                  jira_base_url: https://your-company.atlassian.net
+                  jira_provider: native
+                  format: json
       responses:
         '200':
           description: Assembled prompt args
@@ -96,20 +137,34 @@ paths:
               schema:
                 $ref: '#/components/schemas/PromptArgs'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/run:
     post:
       summary: Build prompt from git diff range
+      operationId: runPromptFromGitDiff
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RunArgs'
+            examples:
+              default:
+                value:
+                  git: HEAD~1..HEAD
+                  repo: .
+                  prompt:
+                    mode: standard
+                    stack: Rust + Axum + PostgreSQL
+                    goal: 修复重复下单
+                    rules:
+                      - 一个订单只能支付一次
+                      - 幂等键必须生效
+                    format: json
+                  include_context: true
+                  context_budget_bytes: 48000
+                  context_file_max_bytes: 12000
       responses:
         '200':
           description: Prompt output
@@ -118,20 +173,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/PromptOutput'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/review:
     post:
       summary: Execute single-pass review
+      operationId: executeReview
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ReviewArgs'
+            examples:
+              standard:
+                value:
+                  model: gpt-5.4
+                  prompt_args:
+                    mode: standard
+                    stack: Rust + Axum + PostgreSQL
+                    goal: 修复重复下单
+                    rules:
+                      - 一个订单只能支付一次
+                      - 幂等键必须生效
+                    files:
+                      - src/order/service.rs
+                    format: json
       responses:
         '200':
           description: Review result
@@ -140,20 +207,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReviewApiResponse'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
   /api/deep-review:
     post:
       summary: Execute two-stage deep review
+      operationId: executeDeepReview
+      tags: [review]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DeepReviewArgs'
+            examples:
+              critical:
+                value:
+                  git: HEAD~1..HEAD
+                  repo: .
+                  model: gpt-5.4
+                  prompt:
+                    mode: critical
+                    stack: Rust + Axum + PostgreSQL
+                    goal: 修复重复下单
+                    rules:
+                      - 一个订单只能支付一次
+                      - 幂等键必须生效
+                    focus:
+                      - 支付安全
+                      - 事务一致性
+                    format: json
+                  include_context: true
+                  context_budget_bytes: 48000
+                  context_file_max_bytes: 12000
       responses:
         '200':
           description: Deep review result
@@ -162,12 +247,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/DeepReviewApiResponse'
         '400':
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
+          $ref: '#/components/responses/ApiErrorResponse'
 components:
+  responses:
+    ApiErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+          examples:
+            default:
+              value:
+                error: review blocked: standard 模式缺少必需上下文: rules
   schemas:
     ApiError:
       type: object

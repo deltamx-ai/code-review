@@ -280,6 +280,12 @@ cargo run -- serve --bind 0.0.0.0:3000
 
 如果你要给前端、客户端生成器或接口调试工具使用，也可以直接看 OpenAPI 草案：`docs/openapi.yaml`
 
+它现在已经补了：
+- 路由级 summary / operationId / tags
+- requestBody 示例
+- 主要 response schema
+- 通用错误响应
+
 - `GET /api/health`
 - `GET /api/models`
 - `POST /api/validate`
