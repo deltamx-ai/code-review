@@ -7,6 +7,7 @@
 - `prompt`：从结构化输入生成 review prompt
 - `assemble`：预览自动装配结果（含 Jira enrich）
 - `run`：从 `git diff` 自动提取改动并生成 prompt，并自动扩展部分关联上下文
+- `analyze`：一键串起准入检查、prompt 生成、LLM 审查和最终报告输出
 - `deep-review`：执行两阶段 review，第一轮先审，第二轮基于高风险点自动扩展上下文再深挖
 - `validate`：检查 review 输入是否充分
 - `template`：输出 review 模板
@@ -207,6 +208,44 @@ code-review run \
   --stack "Rust + Axum + PostgreSQL"
 ```
 
+### 一键分析（推荐主入口）
+
+这是现在最推荐的使用方式，会自动串起：
+- git diff / 上下文收集
+- 准入检查
+- prompt 生成
+- LLM 审查
+- 最终报告输出
+
+默认走 `deep` 策略：
+
+```bash
+code-review analyze \
+  --repo . \
+  --git HEAD~1..HEAD
+```
+
+如果你只想跑单轮：
+
+```bash
+code-review analyze \
+  --repo . \
+  --git HEAD~1..HEAD \
+  --strategy standard
+```
+
+带业务上下文：
+
+```bash
+code-review analyze \
+  --repo . \
+  --git HEAD~1..HEAD \
+  --stack "Rust + Axum + PostgreSQL" \
+  --goal "修复重复下单" \
+  --rule "一个订单只能支付一次" \
+  --rule "幂等键必须生效"
+```
+
 ### 执行真实 review
 
 如果配置文件里已经设了默认模型，`review` 和 `deep-review` 会自动使用，不需要每次传 `--model`。
@@ -292,6 +331,7 @@ cargo run -- serve --bind 0.0.0.0:3000
 - `POST /api/prompt`
 - `POST /api/assemble`
 - `POST /api/run`
+- `POST /api/analyze`
 - `POST /api/review`
 - `POST /api/deep-review`
 
@@ -399,7 +439,37 @@ curl -s -X POST http://127.0.0.1:3000/api/run \
   }' | jq
 ```
 
-### 7. 执行单轮 review
+### 7. 一键 analyze
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "git": "HEAD~1..HEAD",
+    "repo": ".",
+    "model": "gpt-5.4",
+    "strategy": "deep",
+    "prompt": {
+      "mode": "critical",
+      "stack": "Rust + Axum + PostgreSQL",
+      "goal": "修复重复下单",
+      "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+      "focus": ["接口契约", "事务一致性"],
+      "format": "json"
+    },
+    "include_context": true,
+    "context_budget_bytes": 48000,
+    "context_file_max_bytes": 12000
+  }' | jq
+```
+
+返回中会统一包含：
+- `admission`
+- `prompt`
+- `review` 或 `stage1/stage2`
+- `exit_code`
+
+### 8. 执行单轮 review
 
 > 需要先完成 `code-review auth login`，因为底层仍然调用本机 `copilot` CLI。
 

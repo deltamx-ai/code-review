@@ -616,6 +616,56 @@ components:
           type: integer
         result:
           $ref: '#/components/schemas/ReviewResult'
+    AnalyzeApiResponse:
+      type: object
+      properties:
+        strategy:
+          type: string
+        admission:
+          $ref: '#/components/schemas/AdmissionResult'
+        prompt:
+          $ref: '#/components/schemas/PromptOutput'
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewResult'
+          nullable: true
+        stage1:
+          allOf:
+            - $ref: '#/components/schemas/ReviewResult'
+          nullable: true
+        stage2:
+          allOf:
+            - $ref: '#/components/schemas/ReviewResult'
+          nullable: true
+        exit_code:
+          type: integer
+    DeepReviewApiResponse:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+        stage1:
+          $ref: '#/components/schemas/ReviewResult'
+        stage2:
+          $ref: '#/components/schemas/ReviewResult'
+tView'
+        validation_report:
+          allOf:
+            - $ref: '#/components/schemas/ReviewValidationReport'
+          nullable: true
+        repair_attempted:
+          type: boolean
+        repair_succeeded:
+          type: boolean
+        raw_text:
+          type: string
+    ReviewApiResponse:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+        result:
+          $ref: '#/components/schemas/ReviewResult'
     DeepReviewApiResponse:
       type: object
       properties:
