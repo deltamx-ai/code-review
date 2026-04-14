@@ -192,6 +192,7 @@ fn prepare_run_prompt(args: &RunArgs) -> Result<(PromptArgs, String, context::Co
     enrich_prompt_args(&mut prompt_args, &files)?;
     maybe_expand_context_files(&mut prompt_args, &files);
     auto_expand_context_paths(&mut prompt_args, &repo_files, &files);
+    auto_expand_dependency_context_paths(&args.repo, &mut prompt_args, &repo_files, &files, 16_000)?;
 
     let contexts = if args.include_context {
         context::read_repo_context_with_budget(
@@ -301,6 +302,7 @@ pub fn execute_deep_review(store: &SessionStore, args: &DeepReviewArgs) -> Resul
     enrich_prompt_args(&mut prompt_args, &changed_files)?;
     maybe_expand_context_files(&mut prompt_args, &changed_files);
     auto_expand_context_paths(&mut prompt_args, &repo_files, &changed_files);
+    auto_expand_dependency_context_paths(&args.repo, &mut prompt_args, &repo_files, &changed_files, 16_000)?;
 
     let stage1_contexts = if args.include_context {
         context::read_repo_context_with_budget(
@@ -411,6 +413,7 @@ pub fn render_prompt_execution(format: OutputFormat, execution: &PromptExecution
                     test_results_count: execution.summary.test_results_count,
                     files: execution.summary.files.clone(),
                     context_files: execution.summary.context_files.clone(),
+                    dependency_context_files: execution.summary.dependency_context_files.clone(),
                     has_diff: execution.summary.has_diff,
                 },
             };
@@ -528,6 +531,43 @@ pub fn auto_expand_context_paths(args: &mut PromptArgs, repo_files: &[String], c
             args.context_files.push(PathBuf::from(file));
         }
     }
+}
+
+pub fn auto_expand_dependency_context_paths(
+    repo: &PathBuf,
+    args: &mut PromptArgs,
+    repo_files: &[String],
+    changed_files: &[String],
+    per_file_bytes: usize,
+) -> Result<()> {
+    let mut seed_files = changed_files.to_vec();
+    for path in &args.context_files {
+        let p = path.display().to_string();
+        if !seed_files.contains(&p) {
+            seed_files.push(p);
+        }
+    }
+
+    let seed_contexts = context::read_repo_context_with_budget(repo, &seed_files, per_file_bytes * seed_files.len().max(1), per_file_bytes)?;
+    let file_contents = seed_contexts
+        .files
+        .into_iter()
+        .map(|f| (f.path, f.content))
+        .collect::<Vec<_>>();
+
+    let expanded = crate::expand::expand_dependency_files(changed_files, repo_files, &file_contents);
+    let mut seen = args.context_files.iter().map(|p| p.display().to_string()).collect::<BTreeSet<_>>();
+
+    for file in expanded.all_files() {
+        if changed_files.contains(&file) {
+            continue;
+        }
+        if seen.insert(file.clone()) {
+            args.context_files.push(PathBuf::from(file.clone()));
+            args.focus.push(format!("dependency-context: {}", file));
+        }
+    }
+    Ok(())
 }
 
 pub fn extract_stage2_focus(stage1: &str) -> (Vec<String>, Vec<String>) {

@@ -52,6 +52,7 @@ pub struct PromptSummary {
     pub test_results_count: usize,
     pub files: Vec<String>,
     pub context_files: Vec<String>,
+    pub dependency_context_files: Vec<String>,
     pub has_diff: bool,
 }
 
@@ -69,6 +70,11 @@ impl PromptSummary {
                 .context_files
                 .iter()
                 .map(|p| p.display().to_string())
+                .collect(),
+            dependency_context_files: args
+                .focus
+                .iter()
+                .filter_map(|f| f.strip_prefix("dependency-context:").map(|s| s.trim().to_string()))
                 .collect(),
             has_diff: args.diff_file.is_some(),
         }

@@ -246,6 +246,37 @@ code-review analyze \
   --rule "幂等键必须生效"
 ```
 
+### 语言支持边界（当前版本）
+
+先说结论：
+- **不是只支持 Rust**
+- 但也**不是所有语言都做到同样精度**
+
+当前这套“依赖/调用链上下文扩展”主要是**跨语言启发式**，对下面这些项目形态会比较有帮助：
+- Rust
+- Java / Kotlin（Spring 一类分层项目）
+- TypeScript / JavaScript
+- React / Next.js
+- Vue
+- Angular
+- Node.js 服务端
+
+原因不是我们做了完整 AST / LSP 级分析，而是现在的扩展逻辑主要基于：
+- 文件命名模式
+- 符号提取（fn / struct / class / interface / type 等）
+- symbol 定义/引用搜索
+- handler / service / repo / route / dto / api 这类工程链路启发式
+
+所以：
+- 对**工程分层清晰、命名规范**的 Java / TS / React / Vue / Angular 项目，效果通常不错
+- 对**动态语言特性很重**、大量反射/运行时注册/魔法字符串的项目，精度会下降
+- 对需要**精确调用图**的复杂场景，现在还不如 language server / 静态分析器那么强
+
+这版的定位是：
+- 比“只看 diff”强很多
+- 比 IDE 里直接点一次 review 更容易看到跨文件影响
+- 但还不是编译器级/语义级依赖分析
+
 ### 执行真实 review
 
 如果配置文件里已经设了默认模型，`review` 和 `deep-review` 会自动使用，不需要每次传 `--model`。
