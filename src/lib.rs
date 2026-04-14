@@ -33,7 +33,7 @@ use regex::Regex;
 use session::SessionStore;
 use std::collections::BTreeSet;
 
-pub fn run() -> Result<()> {
+pub fn run() -> Result<i32> {
     let cli = Cli::parse();
     let cfg = load_config()?;
     let store = SessionStore::new_default()?;
@@ -119,7 +119,8 @@ pub fn run() -> Result<()> {
                 !contexts.files.is_empty() || !files.is_empty(),
             );
             if !admission.ok {
-                bail!("review blocked: {}", admission.block_reasons.join(" | "));
+                eprintln!("review blocked: {}", admission.block_reasons.join(" | "));
+                return Ok(3);
             }
             let prompt = build_prompt_from_sources(&prompt_args, Some(diff), contexts)?;
             output_prompt(
@@ -146,7 +147,7 @@ pub fn run() -> Result<()> {
             if args.context_file_max_bytes == 12_000 {
                 if let Some(v) = cfg.review.context_file_max_bytes { args.context_file_max_bytes = v; }
             }
-            run_deep_review(&store, args)?;
+            return run_deep_review(&store, args);
         }
         Commands::Models { format } => {
             let models = models::list_models(&cfg)?;
@@ -263,7 +264,8 @@ pub fn run() -> Result<()> {
                     !prompt_args.context_files.is_empty() || !prompt_args.files.is_empty(),
                 );
                 if !admission.ok {
-                    bail!("review blocked: {}", admission.block_reasons.join(" | "));
+                    eprintln!("review blocked: {}", admission.block_reasons.join(" | "));
+                    return Ok(3);
                 }
                 (
                     build_prompt(&prompt_args)?,
@@ -310,10 +312,18 @@ pub fn run() -> Result<()> {
                 cli::OutputFormat::Text => println!("{}", render_review_result_text(&parsed)),
                 cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&parsed)?),
             }
+            let exit_code = if parsed.validation_report.as_ref().map(|r| !r.ok).unwrap_or(false) {
+                4
+            } else if parsed.needs_human_review || !parsed.high_risk.is_empty() {
+                2
+            } else {
+                0
+            };
+            return Ok(exit_code);
         }
     }
 
-    Ok(())
+    Ok(0)
 }
 
 fn auto_expand_context_paths(
@@ -359,7 +369,7 @@ fn extract_stage2_focus(stage1: &str) -> (Vec<String>, Vec<String>) {
     (files.into_iter().collect(), hints.into_iter().take(8).collect())
 }
 
-fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()> {
+fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<i32> {
     let status = copilot::status(store)?;
     if !status.logged_in {
         bail!("Copilot is not authenticated. Run `code-review auth login` first.");
@@ -399,7 +409,8 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
         !stage1_contexts.files.is_empty() || !changed_files.is_empty(),
     );
     if !stage1_admission.ok {
-        bail!("deep-review blocked: {}", stage1_admission.block_reasons.join(" | "));
+        eprintln!("deep-review blocked: {}", stage1_admission.block_reasons.join(" | "));
+        return Ok(3);
     }
 
     let stage1_prompt = build_prompt_from_sources(&prompt_args, Some(diff.clone()), stage1_contexts)?;
@@ -502,7 +513,14 @@ fn run_deep_review(store: &SessionStore, args: cli::DeepReviewArgs) -> Result<()
             );
         }
     }
-    Ok(())
+    let exit_code = if stage2_parsed.validation_report.as_ref().map(|r| !r.ok).unwrap_or(false) {
+        4
+    } else if stage2_parsed.needs_human_review || !stage2_parsed.high_risk.is_empty() {
+        2
+    } else {
+        0
+    };
+    Ok(exit_code)
 }
 
 fn build_repair_prompt(raw_output: &str, mode: cli::ReviewMode) -> String {
@@ -569,6 +587,13 @@ mod tests {
         assert!(files.iter().any(|f| f == "src/order/service.rs"));
         assert!(files.iter().any(|f| f == "src/order/dto.rs"));
         assert!(hints.iter().any(|h| h.contains("不确定")));
+    }
+
+    #[test]
+    fn repair_prompt_contains_required_sections() {
+        let prompt = build_repair_prompt("raw output", cli::ReviewMode::Critical);
+        assert!(prompt.contains("高风险问题"));
+        assert!(prompt.contains("发布建议 / 人工确认项"));
     }
 
     #[test]

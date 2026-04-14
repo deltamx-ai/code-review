@@ -1,6 +1,9 @@
 fn main() {
-    if let Err(err) = code_review::run() {
-        eprintln!("Error: {err:#}");
-        std::process::exit(1);
+    match code_review::run() {
+        Ok(code) => std::process::exit(code),
+        Err(err) => {
+            eprintln!("Error: {err:#}");
+            std::process::exit(5);
+        }
     }
 }
