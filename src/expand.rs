@@ -26,6 +26,17 @@ impl DependencyExpansion {
         }
         set.into_iter().collect()
     }
+
+    pub fn prioritized_groups(self) -> Vec<(&'static str, Vec<String>)> {
+        vec![
+            ("import-chain", self.import_chain_files),
+            ("backend-chain", self.backend_chain_files),
+            ("frontend-chain", self.frontend_chain_files),
+            ("route-chain", self.route_chain_files),
+            ("reference", self.reference_files),
+            ("symbol", self.symbol_files),
+        ]
+    }
 }
 
 pub fn expand_related_files(changed_files: &[String], repo_files: &[String]) -> Vec<String> {

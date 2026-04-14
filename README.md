@@ -279,6 +279,11 @@ code-review analyze \
 - 比 IDE 里直接点一次 review 更容易看到跨文件影响
 - 但还不是编译器级/语义级依赖分析
 
+为了提升准确性而不是单纯扩大动作范围，当前依赖扩展还做了一个简单的优先级控制：
+- 更优先保留 import-chain / backend-chain / frontend-chain 这类更有依据的上下文
+- route-chain 次之
+- reference / symbol 这类噪音更高的来源会被更靠后、限量纳入
+
 ### 执行真实 review
 
 如果配置文件里已经设了默认模型，`review` 和 `deep-review` 会自动使用，不需要每次传 `--model`。
