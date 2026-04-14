@@ -276,6 +276,10 @@ cargo run -- serve --bind 0.0.0.0:3000
 
 ### 接口列表
 
+更完整的字段说明和响应 schema 草案见：`docs/http-api.md`
+
+如果你要给前端、客户端生成器或接口调试工具使用，也可以直接看 OpenAPI 草案：`docs/openapi.yaml`
+
 - `GET /api/health`
 - `GET /api/models`
 - `POST /api/validate`

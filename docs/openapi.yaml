@@ -1,0 +1,535 @@
+openapi: 3.0.3
+info:
+  title: code-review HTTP API
+  version: 0.1.0
+  description: |
+    Local HTTP API for the code-review service.
+    This API wraps the same service-layer flows used by the CLI.
+servers:
+  - url: http://127.0.0.1:3000
+    description: Local default server
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/models:
+    get:
+      summary: List available models
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/validate:
+    post:
+      summary: Validate review input admission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptArgs'
+      responses:
+        '200':
+          description: Admission result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdmissionResult'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/prompt:
+    post:
+      summary: Build prompt from structured input
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptArgs'
+      responses:
+        '200':
+          description: Prompt output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptOutput'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/assemble:
+    post:
+      summary: Assemble prompt args with enrichments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptArgs'
+      responses:
+        '200':
+          description: Assembled prompt args
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptArgs'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/run:
+    post:
+      summary: Build prompt from git diff range
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunArgs'
+      responses:
+        '200':
+          description: Prompt output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptOutput'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/review:
+    post:
+      summary: Execute single-pass review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewArgs'
+      responses:
+        '200':
+          description: Review result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewApiResponse'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/deep-review:
+    post:
+      summary: Execute two-stage deep review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeepReviewArgs'
+      responses:
+        '200':
+          description: Deep review result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeepReviewApiResponse'
+        '400':
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+components:
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    HealthResponse:
+      type: object
+      required: [ok, service]
+      properties:
+        ok:
+          type: boolean
+        service:
+          type: string
+    ModelList:
+      type: object
+      properties:
+        provider:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+        default_model:
+          type: string
+          nullable: true
+        source:
+          type: string
+    ReviewMode:
+      type: string
+      enum: [lite, standard, critical]
+    OutputFormat:
+      type: string
+      enum: [text, json]
+    PromptArgs:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/ReviewMode'
+        stack:
+          type: string
+          nullable: true
+        goal:
+          type: string
+          nullable: true
+        why:
+          type: string
+          nullable: true
+        rules:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
+        expected_normal:
+          type: string
+          nullable: true
+        expected_error:
+          type: string
+          nullable: true
+        expected_edge:
+          type: string
+          nullable: true
+        issue:
+          type: string
+          nullable: true
+        test_results:
+          type: array
+          items:
+            type: string
+        jira:
+          type: string
+          nullable: true
+        jira_base_url:
+          type: string
+          nullable: true
+        jira_provider:
+          type: string
+        jira_command:
+          type: string
+          nullable: true
+        diff_file:
+          type: string
+          nullable: true
+        context_files:
+          type: array
+          items:
+            type: string
+        files:
+          type: array
+          items:
+            type: string
+        focus:
+          type: array
+          items:
+            type: string
+        baseline_files:
+          type: array
+          items:
+            type: string
+        change_type:
+          type: string
+          nullable: true
+        format:
+          $ref: '#/components/schemas/OutputFormat'
+    RunArgs:
+      type: object
+      required: [git, repo, prompt, include_context, context_budget_bytes, context_file_max_bytes]
+      properties:
+        git:
+          type: string
+        repo:
+          type: string
+        prompt:
+          $ref: '#/components/schemas/PromptArgs'
+        include_context:
+          type: boolean
+        context_budget_bytes:
+          type: integer
+        context_file_max_bytes:
+          type: integer
+    ReviewArgs:
+      type: object
+      properties:
+        prompt:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+        prompt_args:
+          $ref: '#/components/schemas/PromptArgs'
+    DeepReviewArgs:
+      type: object
+      required: [git, repo, prompt, include_context, context_budget_bytes, context_file_max_bytes]
+      properties:
+        git:
+          type: string
+        repo:
+          type: string
+        model:
+          type: string
+          nullable: true
+        prompt:
+          $ref: '#/components/schemas/PromptArgs'
+        include_context:
+          type: boolean
+        context_budget_bytes:
+          type: integer
+        context_file_max_bytes:
+          type: integer
+    AdmissionResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        level:
+          type: string
+        score:
+          type: integer
+        confidence:
+          type: string
+        missing_p0:
+          type: array
+          items:
+            type: string
+        missing_p1:
+          type: array
+          items:
+            type: string
+        missing_p2:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        block_reasons:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+    PromptSummary:
+      type: object
+      properties:
+        stack:
+          type: string
+          nullable: true
+        goal:
+          type: string
+          nullable: true
+        issue:
+          type: string
+          nullable: true
+        rules_count:
+          type: integer
+        risks:
+          type: array
+          items:
+            type: string
+        test_results_count:
+          type: integer
+        files:
+          type: array
+          items:
+            type: string
+        context_files:
+          type: array
+          items:
+            type: string
+        has_diff:
+          type: boolean
+    PromptOutput:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        score:
+          type: integer
+        prompt:
+          type: string
+        summary:
+          $ref: '#/components/schemas/PromptSummary'
+    ReviewIssue:
+      type: object
+      properties:
+        title:
+          type: string
+        file:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        trigger:
+          type: string
+          nullable: true
+        impact:
+          type: string
+          nullable: true
+        suggestion:
+          type: string
+          nullable: true
+    MissingTestCase:
+      type: object
+      properties:
+        title:
+          type: string
+        scenario:
+          type: string
+          nullable: true
+    RiskHintView:
+      type: object
+      properties:
+        title:
+          type: string
+        detail:
+          type: string
+        source:
+          type: string
+    ValidationFinding:
+      type: object
+      properties:
+        severity:
+          type: string
+        field:
+          type: string
+        message:
+          type: string
+    ReviewValidationReport:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        repaired:
+          type: boolean
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationFinding'
+    ReviewResult:
+      type: object
+      properties:
+        mode:
+          type: string
+        input_ok:
+          type: boolean
+        input_level:
+          type: string
+        input_score:
+          type: integer
+        confidence:
+          type: string
+        high_risk:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewIssue'
+        medium_risk:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewIssue'
+        low_risk:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewIssue'
+        missing_tests:
+          type: array
+          items:
+            $ref: '#/components/schemas/MissingTestCase'
+        summary:
+          type: string
+        needs_human_review:
+          type: boolean
+        used_rules:
+          type: array
+          items:
+            type: string
+        impact_scope:
+          type: array
+          items:
+            type: string
+        release_checks:
+          type: array
+          items:
+            type: string
+        risk_hints:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskHintView'
+        validation_report:
+          allOf:
+            - $ref: '#/components/schemas/ReviewValidationReport'
+          nullable: true
+        repair_attempted:
+          type: boolean
+        repair_succeeded:
+          type: boolean
+        raw_text:
+          type: string
+    ReviewApiResponse:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+        result:
+          $ref: '#/components/schemas/ReviewResult'
+    DeepReviewApiResponse:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+        stage1:
+          $ref: '#/components/schemas/ReviewResult'
+        stage2:
+          $ref: '#/components/schemas/ReviewResult'
