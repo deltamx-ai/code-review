@@ -5,6 +5,9 @@ pub struct DependencyExpansion {
     pub symbol_files: Vec<String>,
     pub reference_files: Vec<String>,
     pub route_chain_files: Vec<String>,
+    pub import_chain_files: Vec<String>,
+    pub frontend_chain_files: Vec<String>,
+    pub backend_chain_files: Vec<String>,
 }
 
 impl DependencyExpansion {
@@ -15,6 +18,9 @@ impl DependencyExpansion {
             .iter()
             .chain(self.reference_files.iter())
             .chain(self.route_chain_files.iter())
+            .chain(self.import_chain_files.iter())
+            .chain(self.frontend_chain_files.iter())
+            .chain(self.backend_chain_files.iter())
         {
             set.insert(file.clone());
         }
@@ -61,9 +67,12 @@ pub fn expand_dependency_files(
     let mut symbol_files = BTreeSet::new();
     let mut reference_files = BTreeSet::new();
     let mut route_chain_files = BTreeSet::new();
+    let mut import_chain_files = BTreeSet::new();
+    let mut frontend_chain_files = BTreeSet::new();
+    let mut backend_chain_files = BTreeSet::new();
     let changed_set = changed_files.iter().cloned().collect::<BTreeSet<_>>();
-
     let repo_lookup = repo_files.iter().cloned().collect::<BTreeSet<_>>();
+
     let extracted_symbols = file_contents
         .iter()
         .flat_map(|(_, content)| extract_symbols(content))
@@ -100,9 +109,22 @@ pub fn expand_dependency_files(
         }
     }
 
+    for (path, content) in file_contents {
+        for import_path in extract_import_like_paths(content) {
+            if repo_lookup.contains(&import_path) && !changed_set.contains(&import_path) {
+                import_chain_files.insert(import_path);
+            } else if let Some(found) = resolve_import_candidate(path, &import_path, repo_files) {
+                if !changed_set.contains(&found) {
+                    import_chain_files.insert(found);
+                }
+            }
+        }
+    }
+
     for changed in changed_files {
         let lower = changed.to_lowercase();
         let base = file_stem_name(changed).to_lowercase();
+
         if lower.contains("handler") || lower.contains("controller") || lower.contains("route") || lower.contains("router") {
             for candidate in repo_files {
                 let c = candidate.to_lowercase();
@@ -116,6 +138,7 @@ pub fn expand_dependency_files(
                 }
             }
         }
+
         if lower.contains("service") || lower.contains("repo") || lower.contains("store") {
             for candidate in repo_files {
                 let c = candidate.to_lowercase();
@@ -129,12 +152,76 @@ pub fn expand_dependency_files(
                 }
             }
         }
+
+        if is_frontend_component_path(&lower) {
+            for candidate in repo_files {
+                let c = candidate.to_lowercase();
+                if changed_set.contains(candidate) {
+                    continue;
+                }
+                if (c.contains("store") || c.contains("hook") || c.contains("composable") || c.contains("service") || c.contains("api") || c.contains("query"))
+                    && (base.is_empty() || c.contains(&base))
+                {
+                    frontend_chain_files.insert(candidate.clone());
+                }
+            }
+        }
+
+        if lower.contains("store") || lower.contains("hook") || lower.contains("composable") {
+            for candidate in repo_files {
+                let c = candidate.to_lowercase();
+                if changed_set.contains(candidate) {
+                    continue;
+                }
+                if (c.contains("component") || c.contains("page") || c.ends_with(".tsx") || c.ends_with(".jsx") || c.ends_with(".vue"))
+                    && (base.is_empty() || c.contains(&base))
+                {
+                    frontend_chain_files.insert(candidate.clone());
+                }
+            }
+        }
+
+        if lower.contains("controller") || lower.contains("resource") {
+            let class_base = base
+                .replace("controller", "")
+                .replace("resource", "")
+                .trim()
+                .to_string();
+            for candidate in repo_files {
+                let c = candidate.to_lowercase();
+                if changed_set.contains(candidate) {
+                    continue;
+                }
+                if (c.contains("service") || c.contains("repository") || c.contains("repo") || c.contains("entity") || c.contains("dto"))
+                    && (base.is_empty() || c.contains(&base) || (!class_base.is_empty() && c.contains(&class_base)))
+                {
+                    backend_chain_files.insert(candidate.clone());
+                }
+            }
+        }
+
+        if lower.contains("service") || lower.contains("repository") || lower.contains("repo") {
+            for candidate in repo_files {
+                let c = candidate.to_lowercase();
+                if changed_set.contains(candidate) {
+                    continue;
+                }
+                if (c.contains("controller") || c.contains("resource") || c.contains("entity") || c.contains("dto"))
+                    && (base.is_empty() || c.contains(&base))
+                {
+                    backend_chain_files.insert(candidate.clone());
+                }
+            }
+        }
     }
 
     DependencyExpansion {
         symbol_files: filter_existing(symbol_files, &repo_lookup, 10),
         reference_files: filter_existing(reference_files, &repo_lookup, 10),
         route_chain_files: filter_existing(route_chain_files, &repo_lookup, 10),
+        import_chain_files: filter_existing(import_chain_files, &repo_lookup, 12),
+        frontend_chain_files: filter_existing(frontend_chain_files, &repo_lookup, 10),
+        backend_chain_files: filter_existing(backend_chain_files, &repo_lookup, 10),
     }
 }
 
@@ -196,7 +283,12 @@ fn extract_symbols(content: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     for line in content.lines() {
         let l = line.trim();
-        for prefix in ["fn ", "pub fn ", "async fn ", "pub async fn ", "struct ", "pub struct ", "enum ", "pub enum ", "trait ", "pub trait ", "interface ", "class ", "type ", "pub type "] {
+        for prefix in [
+            "fn ", "pub fn ", "async fn ", "pub async fn ",
+            "struct ", "pub struct ", "enum ", "pub enum ",
+            "trait ", "pub trait ", "interface ", "class ",
+            "type ", "pub type ",
+        ] {
             if let Some(rest) = l.strip_prefix(prefix) {
                 let name = rest
                     .split(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -240,6 +332,73 @@ fn references_symbol(content: &str, symbol: &str) -> bool {
     content.contains(&exact_call) || content.contains(symbol) || content.contains(&exact_ref)
 }
 
+fn extract_import_like_paths(content: &str) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for line in content.lines() {
+        let l = line.trim();
+        for marker in ["from '", "from \"", "import '", "import \"", "require(\"", "require('", "use "] {
+            if let Some(idx) = l.find(marker) {
+                let rest = &l[idx + marker.len()..];
+                let path = rest
+                    .split(['\'', '"', ';', ')', ' '])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !path.is_empty() && !path.starts_with('@') {
+                    out.insert(path.to_string());
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn resolve_import_candidate(base_file: &str, import_path: &str, repo_files: &[String]) -> Option<String> {
+    let base_dir = base_file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let normalized = import_path.trim_start_matches("./").trim_start_matches("../");
+
+    let mut candidates = vec![
+        format!("{}/{}", base_dir, normalized),
+        normalized.to_string(),
+        format!("{}.ts", normalized),
+        format!("{}.tsx", normalized),
+        format!("{}.js", normalized),
+        format!("{}.jsx", normalized),
+        format!("{}.vue", normalized),
+        format!("{}.java", normalized),
+        format!("{}.kt", normalized),
+        format!("{}/index.ts", normalized),
+        format!("{}/index.tsx", normalized),
+        format!("{}/index.js", normalized),
+    ];
+
+    if base_dir.is_empty() {
+        candidates.push(normalized.to_string());
+    } else {
+        candidates.push(format!("{}/{}.ts", base_dir, normalized));
+        candidates.push(format!("{}/{}.tsx", base_dir, normalized));
+        candidates.push(format!("{}/{}.js", base_dir, normalized));
+        candidates.push(format!("{}/{}.jsx", base_dir, normalized));
+        candidates.push(format!("{}/{}.vue", base_dir, normalized));
+        candidates.push(format!("{}/{}.java", base_dir, normalized));
+    }
+
+    repo_files.iter().find(|f| candidates.iter().any(|c| normalize_path(c) == normalize_path(f))).cloned()
+}
+
+fn normalize_path(path: &str) -> String {
+    path.replace("//", "/").trim_start_matches("./").to_string()
+}
+
+fn is_frontend_component_path(lower: &str) -> bool {
+    lower.contains("component")
+        || lower.contains("page")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".vue")
+        || lower.contains("container")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +437,42 @@ mod tests {
         let all = expanded.all_files();
         assert!(all.iter().any(|f| f.ends_with("handler.rs")));
         assert!(all.iter().any(|f| f.ends_with("repo.rs")) || all.iter().any(|f| f.ends_with("dto.rs")));
+    }
+
+    #[test]
+    fn expands_import_chain_for_ts_and_frontend_patterns() {
+        let changed = vec!["src/pages/orders.tsx".to_string()];
+        let repo = vec![
+            "src/pages/orders.tsx".to_string(),
+            "src/services/orderService.ts".to_string(),
+            "src/store/orderStore.ts".to_string(),
+            "src/api/orders.ts".to_string(),
+        ];
+        let contents = vec![
+            ("src/pages/orders.tsx".to_string(), "import { listOrders } from '../services/orderService'; import { useOrderStore } from '../store/orderStore';".to_string()),
+            ("src/services/orderService.ts".to_string(), "export function listOrders() {}".to_string()),
+            ("src/store/orderStore.ts".to_string(), "export function useOrderStore() {}".to_string()),
+            ("src/api/orders.ts".to_string(), "export const ordersApi = {}".to_string()),
+        ];
+        let expanded = expand_dependency_files(&changed, &repo, &contents);
+        let all = expanded.all_files();
+        assert!(all.iter().any(|f| f.ends_with("orderService.ts")));
+        assert!(all.iter().any(|f| f.ends_with("orderStore.ts")));
+    }
+
+    #[test]
+    fn expands_java_backend_chain() {
+        let changed = vec!["src/main/java/com/acme/order/OrderController.java".to_string()];
+        let repo = vec![
+            "src/main/java/com/acme/order/OrderController.java".to_string(),
+            "src/main/java/com/acme/order/OrderService.java".to_string(),
+            "src/main/java/com/acme/order/OrderRepository.java".to_string(),
+            "src/main/java/com/acme/order/OrderDto.java".to_string(),
+        ];
+        let contents = vec![("src/main/java/com/acme/order/OrderController.java".to_string(), "class OrderController { OrderService service; }".to_string())];
+        let expanded = expand_dependency_files(&changed, &repo, &contents);
+        let all = expanded.all_files();
+        assert!(all.iter().any(|f| f.ends_with("OrderService.java")));
+        assert!(all.iter().any(|f| f.ends_with("OrderRepository.java")) || all.iter().any(|f| f.ends_with("OrderDto.java")));
     }
 }

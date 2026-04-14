@@ -265,7 +265,9 @@ code-review analyze \
 - 文件命名模式
 - 符号提取（fn / struct / class / interface / type 等）
 - symbol 定义/引用搜索
-- handler / service / repo / route / dto / api 这类工程链路启发式
+- import / export / require / use 这类依赖链搜索
+- handler / service / repo / route / dto / api 这类后端工程链路启发式
+- component / page / store / hook / composable / api 这类前端工程链路启发式
 
 所以：
 - 对**工程分层清晰、命名规范**的 Java / TS / React / Vue / Angular 项目，效果通常不错

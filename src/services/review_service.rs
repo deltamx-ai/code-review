@@ -558,13 +558,22 @@ pub fn auto_expand_dependency_context_paths(
     let expanded = crate::expand::expand_dependency_files(changed_files, repo_files, &file_contents);
     let mut seen = args.context_files.iter().map(|p| p.display().to_string()).collect::<BTreeSet<_>>();
 
-    for file in expanded.all_files() {
-        if changed_files.contains(&file) {
-            continue;
-        }
-        if seen.insert(file.clone()) {
-            args.context_files.push(PathBuf::from(file.clone()));
-            args.focus.push(format!("dependency-context: {}", file));
+    for (kind, files) in [
+        ("symbol", expanded.symbol_files),
+        ("reference", expanded.reference_files),
+        ("route-chain", expanded.route_chain_files),
+        ("import-chain", expanded.import_chain_files),
+        ("frontend-chain", expanded.frontend_chain_files),
+        ("backend-chain", expanded.backend_chain_files),
+    ] {
+        for file in files {
+            if changed_files.contains(&file) {
+                continue;
+            }
+            if seen.insert(file.clone()) {
+                args.context_files.push(PathBuf::from(file.clone()));
+                args.focus.push(format!("dependency-context:{}:{}", kind, file));
+            }
         }
     }
     Ok(())
