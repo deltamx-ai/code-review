@@ -12,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
+use tokio::task;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -65,18 +66,27 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn models_handler(State(state): State<ApiState>) -> Result<Json<models::ModelList>, ApiError> {
-    models::list_models(&state.cfg)
-        .map(Json)
-        .map_err(api_error)
+    let cfg = state.cfg.clone();
+    let models = task::spawn_blocking(move || models::list_models(&cfg))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("models task join error: {}", e)))?
+        .map_err(api_error)?;
+    Ok(Json(models))
 }
 
 async fn validate_handler(Json(req): Json<PromptArgs>) -> Result<Json<crate::admission::AdmissionResult>, ApiError> {
-    let execution = execute_validate(&req).map_err(api_error)?;
+    let execution = task::spawn_blocking(move || execute_validate(&req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("validate task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(execution.admission))
 }
 
 async fn prompt_handler(Json(req): Json<PromptArgs>) -> Result<Json<crate::prompt::PromptOutput>, ApiError> {
-    let execution = execute_prompt(&req).map_err(api_error)?;
+    let execution = task::spawn_blocking(move || execute_prompt(&req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("prompt task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(crate::prompt::PromptOutput {
         ok: execution.ok,
         score: execution.score,
@@ -86,12 +96,18 @@ async fn prompt_handler(Json(req): Json<PromptArgs>) -> Result<Json<crate::promp
 }
 
 async fn assemble_handler(Json(req): Json<PromptArgs>) -> Result<Json<PromptArgs>, ApiError> {
-    let execution = execute_assemble(&req).map_err(api_error)?;
+    let execution = task::spawn_blocking(move || execute_assemble(&req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("assemble task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(execution.prompt_args))
 }
 
 async fn run_handler(Json(req): Json<RunArgs>) -> Result<Json<crate::prompt::PromptOutput>, ApiError> {
-    let execution = execute_run(&req).map_err(api_error)?;
+    let execution = task::spawn_blocking(move || execute_run(&req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("run task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(crate::prompt::PromptOutput {
         ok: execution.ok,
         score: execution.score,
@@ -113,7 +129,12 @@ async fn review_handler(
     if req.model.is_none() {
         req.model = state.cfg.llm.model.clone();
     }
-    let execution = execute_review(&state.store, state.cfg.llm.model.clone(), &mut req).map_err(api_error)?;
+    let store = state.store.clone();
+    let cfg_default_model = state.cfg.llm.model.clone();
+    let execution = task::spawn_blocking(move || execute_review(&store, cfg_default_model, &mut req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("review task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(ReviewApiResponse {
         exit_code: execution.exit_code,
         result: execution.result,
@@ -134,7 +155,11 @@ async fn deep_review_handler(
     if req.model.is_none() {
         req.model = state.cfg.llm.model.clone();
     }
-    let execution = execute_deep_review(&state.store, &req).map_err(api_error)?;
+    let store = state.store.clone();
+    let execution = task::spawn_blocking(move || execute_deep_review(&store, &req))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("deep-review task join error: {}", e)))?
+        .map_err(api_error)?;
     Ok(Json(DeepReviewApiResponse {
         exit_code: execution.exit_code,
         stage1: execution.stage1,
