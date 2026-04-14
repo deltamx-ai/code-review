@@ -20,6 +20,14 @@ pub fn render_review_result_text(result: &ReviewResult) -> String {
         out.push('\n');
     }
 
+    if !result.used_rules.is_empty() {
+        out.push_str("使用的业务规则:\n");
+        for rule in &result.used_rules {
+            out.push_str(&format!("- {}\n", rule));
+        }
+        out.push('\n');
+    }
+
     render_issue_block(&mut out, "1. 高风险问题", &result.high_risk);
     render_issue_block(&mut out, "2. 中风险问题", &result.medium_risk);
     render_issue_block(&mut out, "3. 低风险优化建议", &result.low_risk);

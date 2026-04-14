@@ -98,13 +98,16 @@ pub fn execute_validate(args: &PromptArgs) -> Result<ValidateExecution> {
 
 pub fn execute_run(args: &RunArgs) -> Result<PromptExecution> {
     let (prompt_args, diff, contexts, admission) = prepare_run_prompt(args)?;
+    if !admission.ok {
+        bail!("run blocked: {}", admission.block_reasons.join(" | "));
+    }
     let prompt = build_prompt_from_sources(&prompt_args, Some(diff), contexts)?;
     Ok(PromptExecution {
         prompt,
         score: admission.score,
         ok: admission.ok,
         summary: crate::prompt::PromptSummary::from_prompt_args(&prompt_args),
-        exit_code: if admission.ok { 0 } else { 3 },
+        exit_code: 0,
     })
 }
 
@@ -122,7 +125,14 @@ pub fn execute_analyze(
         !assembled.prompt_args.context_files.is_empty() || !assembled.prompt_args.files.is_empty(),
     );
 
-    match args.strategy {
+    // Critical mode must use two-stage review
+    let strategy = if matches!(args.prompt.mode, ReviewMode::Critical) {
+        AnalyzeStrategy::Deep
+    } else {
+        args.strategy
+    };
+
+    match strategy {
         AnalyzeStrategy::Standard => {
             let mut review_args = ReviewArgs {
                 prompt: Some(prompt_execution.prompt.clone()),
@@ -177,16 +187,6 @@ fn prepare_run_prompt(args: &RunArgs) -> Result<(PromptArgs, String, context::Co
     }
     let files = gitops::git_changed_files(&args.repo, &args.git)?;
     let repo_files = gitops::list_repo_files(&args.repo)?;
-    let base_contexts = if args.include_context {
-        context::read_repo_context_with_budget(
-            &args.repo,
-            &files,
-            args.context_budget_bytes,
-            args.context_file_max_bytes,
-        )?
-    } else {
-        context::ContextCollection::default()
-    };
 
     let mut prompt_args = args.to_prompt_args(files.clone());
     enrich_prompt_args(&mut prompt_args, &files)?;
@@ -202,7 +202,7 @@ fn prepare_run_prompt(args: &RunArgs) -> Result<(PromptArgs, String, context::Co
             args.context_file_max_bytes,
         )?
     } else {
-        base_contexts
+        context::ContextCollection::default()
     };
 
     let admission = check_admission(
@@ -230,6 +230,9 @@ pub fn execute_review(
     let (prompt, mode, used_rules, admission, prompt_args_opt) = if let Some(prompt) = args.prompt.clone() {
         (prompt, ReviewMode::Standard, Vec::new(), None, None)
     } else if let Some(prompt_args) = args.to_prompt_args() {
+        if matches!(prompt_args.mode, ReviewMode::Critical) {
+            bail!("critical 模式必须使用两阶段 review，请使用 `deep-review` 或 `analyze` 命令");
+        }
         let admission = check_admission(
             &prompt_args,
             prompt_args.diff_file.is_some(),

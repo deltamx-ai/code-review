@@ -27,14 +27,15 @@ pub struct HealthResponse {
     pub service: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct ApiError {
+    pub status: StatusCode,
     pub error: String,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        (StatusCode::BAD_REQUEST, Json(self)).into_response()
+        (self.status, Json(serde_json::json!({"error": self.error}))).into_response()
     }
 }
 
@@ -204,5 +205,22 @@ async fn deep_review_handler(
 }
 
 fn api_error(err: anyhow::Error) -> ApiError {
-    ApiError { error: err.to_string() }
+    let msg = err.to_string();
+    let lower = msg.to_lowercase();
+    let status = if lower.contains("not authenticated") || lower.contains("auth login") {
+        StatusCode::UNAUTHORIZED
+    } else if lower.contains("critical 模式必须使用两阶段 review") {
+        StatusCode::CONFLICT
+    } else if lower.contains("blocked") {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else if lower.contains("git diff is empty") {
+        StatusCode::NOT_FOUND
+    } else if lower.contains("failed to parse") || lower.contains("provide --prompt") || lower.contains("is empty") || lower.contains("out of range") {
+        StatusCode::BAD_REQUEST
+    } else if lower.contains("failed to read") || lower.contains("no such file") {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    ApiError { status, error: msg }
 }

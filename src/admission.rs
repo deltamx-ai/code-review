@@ -124,7 +124,7 @@ pub fn check_admission(args: &PromptArgs, has_diff: bool, has_context: bool) -> 
         missing_p1.push("test_results".into());
     }
 
-    let has_p2 = !args.baseline_files.is_empty() || !args.focus.is_empty() || args.jira.is_some();
+    let has_p2 = !args.baseline_files.is_empty() || !args.incident_files.is_empty() || !args.focus.is_empty() || args.jira.is_some();
     if has_p2 {
         score += 5;
     } else {
@@ -238,6 +238,7 @@ mod tests {
             files: vec!["src/main.rs".into()],
             focus: vec![],
             baseline_files: vec![],
+            incident_files: vec![],
             change_type: None,
             format: OutputFormat::Text,
         }

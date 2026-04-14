@@ -33,6 +33,8 @@ pub struct ReviewConfig {
     pub include_context: Option<bool>,
     pub context_budget_bytes: Option<usize>,
     pub context_file_max_bytes: Option<usize>,
+    pub output_format: Option<OutputFormat>,
+    pub stack: Option<String>,
 }
 
 impl Default for ReviewConfig {
@@ -42,6 +44,8 @@ impl Default for ReviewConfig {
             include_context: Some(false),
             context_budget_bytes: Some(48_000),
             context_file_max_bytes: Some(12_000),
+            output_format: Some(OutputFormat::Text),
+            stack: None,
         }
     }
 }
@@ -76,7 +80,12 @@ pub fn save_config(cfg: &AppConfig) -> Result<PathBuf> {
 
 pub fn apply_config_defaults(args: &mut PromptArgs, cfg: &AppConfig) {
     if args.stack.is_none() {
-        args.stack = None;
+        args.stack = cfg.review.stack.clone();
+    }
+    if matches!(args.format, crate::cli::OutputFormat::Text) {
+        if let Some(format) = cfg.review.output_format {
+            args.format = format;
+        }
     }
     if args.jira_base_url.is_none() {
         args.jira_base_url = cfg.jira.base_url.clone();
@@ -93,9 +102,6 @@ pub fn apply_config_defaults(args: &mut PromptArgs, cfg: &AppConfig) {
         if let Some(mode) = cfg.review.mode {
             args.mode = mode;
         }
-    }
-    if matches!(args.format, OutputFormat::Text) {
-        args.format = OutputFormat::Text;
     }
 }
 

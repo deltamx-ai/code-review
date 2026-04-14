@@ -53,27 +53,33 @@ enum Section {
 
 fn detect_section(line: &str) -> Option<Section> {
     let lower = line.to_lowercase();
-    if lower.contains("高风险") || lower.contains("high risk") || lower.starts_with("1.") {
-        return Some(Section::High);
+    let normalized = clean_bullet(line)
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == '、' || c.is_whitespace())
+        .trim()
+        .to_string();
+    let normalized_lower = normalized.to_lowercase();
+
+    match normalized_lower.as_str() {
+        "高风险问题" | "high risk" | "high risk issues" => return Some(Section::High),
+        "中风险问题" | "medium risk" | "medium risk issues" => return Some(Section::Medium),
+        "低风险优化建议" | "低风险问题" | "优化建议" | "low risk" | "low risk issues" => return Some(Section::Low),
+        "缺失的测试场景" | "缺失的测试" | "missing tests" | "missing test cases" => return Some(Section::MissingTests),
+        "总结结论" | "总结" | "结论" | "summary" => return Some(Section::Summary),
+        "风险影响面" | "影响面" | "impact scope" => return Some(Section::ImpactScope),
+        "发布建议 / 人工确认项" | "发布建议" | "人工确认项" | "release checks" | "release check" => return Some(Section::ReleaseChecks),
+        _ => {}
     }
-    if lower.contains("中风险") || lower.contains("medium risk") || lower.starts_with("2.") {
-        return Some(Section::Medium);
+
+    if line.len() < 40 {
+        if lower == "1." || lower.starts_with("1. ") { return Some(Section::High); }
+        if lower == "2." || lower.starts_with("2. ") { return Some(Section::Medium); }
+        if lower == "3." || lower.starts_with("3. ") { return Some(Section::Low); }
+        if lower == "4." || lower.starts_with("4. ") { return Some(Section::MissingTests); }
+        if lower == "5." || lower.starts_with("5. ") { return Some(Section::Summary); }
+        if lower == "6." || lower.starts_with("6. ") { return Some(Section::ImpactScope); }
+        if lower == "7." || lower.starts_with("7. ") { return Some(Section::ReleaseChecks); }
     }
-    if lower.contains("低风险") || lower.contains("优化建议") || lower.contains("low risk") || lower.starts_with("3.") {
-        return Some(Section::Low);
-    }
-    if lower.contains("缺失的测试") || lower.contains("missing test") || lower.starts_with("4.") {
-        return Some(Section::MissingTests);
-    }
-    if lower.contains("总结") || lower.contains("结论") || lower.contains("summary") || lower.starts_with("5.") {
-        return Some(Section::Summary);
-    }
-    if lower.contains("影响面") || lower.contains("impact scope") {
-        return Some(Section::ImpactScope);
-    }
-    if lower.contains("发布建议") || lower.contains("人工确认") || lower.contains("release check") || lower.contains("回滚") {
-        return Some(Section::ReleaseChecks);
-    }
+
     None
 }
 

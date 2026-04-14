@@ -125,11 +125,21 @@ pub fn build_prompt(args: &PromptArgs) -> Result<String> {
     };
 
     let mut contexts = ContextCollection::default();
-    for path in args.context_files.iter().chain(args.baseline_files.iter()) {
+    let mut seen_paths = std::collections::BTreeSet::new();
+    for path in args
+        .context_files
+        .iter()
+        .chain(args.baseline_files.iter())
+        .chain(args.incident_files.iter())
+    {
+        let key = path.display().to_string();
+        if !seen_paths.insert(key.clone()) {
+            continue;
+        }
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         contexts.files.push(crate::context::ContextFile {
-            path: path.display().to_string(),
+            path: key,
             content,
             truncated: false,
         });
@@ -182,10 +192,10 @@ pub fn build_prompt_from_sources(
         out.push_str(&format!("额外关注点:\n- {}\n", args.focus.join("\n- ")));
     }
     if !args.baseline_files.is_empty() {
-        out.push_str(&format!("基线/红线文件:\n- {}\n", args.baseline_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
-    }
-    if !args.baseline_files.is_empty() {
         out.push_str(&format!("基线/红线参考文件:\n- {}\n", args.baseline_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
+    }
+    if !args.incident_files.is_empty() {
+        out.push_str(&format!("事故/复盘参考文件:\n- {}\n", args.incident_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n- ")));
     }
     let layers = build_review_layers(args);
     out.push('\n');
@@ -295,6 +305,7 @@ mod tests {
             files: vec![],
             focus: vec![],
             baseline_files: vec![],
+            incident_files: vec![],
             change_type: Some("db".into()),
             format: OutputFormat::Text,
         }

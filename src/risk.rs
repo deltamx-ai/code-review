@@ -73,7 +73,20 @@ pub fn analyze_risks(args: &PromptArgs, changed_files: &[String], diff_text: Opt
         Some("infra") => {
             push_unique(&mut out.release_checks, "确认执行环境、触发条件、权限边界和失败回退策略");
         }
+        Some("contract") | Some("api") => {
+            push_unique(&mut out.release_checks, "确认接口契约兼容性、版本策略、调用方联调窗口和回滚预案");
+        }
         _ => {}
+    }
+
+    if !args.incident_files.is_empty() {
+        out.hints.push(RiskHint {
+            title: "历史事故复发风险".into(),
+            detail: "检测到 incident / postmortem 参考文件，需核对这次改动是否真正覆盖已知事故根因与防回归措施。".into(),
+            source: "incident-file".into(),
+        });
+        push_unique(&mut out.impact_scope, "历史事故相关路径再次改动，可能导致已修复问题复发或旁路回归");
+        push_unique(&mut out.release_checks, "发布前对照事故复盘结论做回归验证，并确认监控与告警覆盖");
     }
 
     if matches!(args.mode, crate::cli::ReviewMode::Critical) {
@@ -120,6 +133,7 @@ mod tests {
             files: vec![],
             focus: vec![],
             baseline_files: vec![],
+            incident_files: vec![],
             change_type: change_type.map(|s| s.to_string()),
             format: OutputFormat::Text,
         }

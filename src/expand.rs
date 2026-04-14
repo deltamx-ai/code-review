@@ -338,9 +338,26 @@ fn defines_symbol(path: &str, content: &str, symbol: &str) -> bool {
 }
 
 fn references_symbol(content: &str, symbol: &str) -> bool {
-    let exact_call = format!("{}(", symbol);
-    let exact_ref = format!(" {} ", symbol);
-    content.contains(&exact_call) || content.contains(symbol) || content.contains(&exact_ref)
+    if symbol.len() < 4 {
+        return false;
+    }
+    let symbol_lower = symbol.to_lowercase();
+    let too_generic = ["data", "item", "list", "user", "order", "model", "type", "name", "test"];
+    if too_generic.iter().any(|v| *v == symbol_lower) {
+        return false;
+    }
+
+    let patterns = [
+        format!("{}(", symbol),
+        format!("{} (", symbol),
+        format!("{}::", symbol),
+        format!(".{}(", symbol),
+        format!("new {}", symbol),
+        format!("<{}", symbol),
+        format!(" {} ", symbol),
+    ];
+
+    patterns.iter().any(|p| content.contains(p))
 }
 
 fn extract_import_like_paths(content: &str) -> Vec<String> {

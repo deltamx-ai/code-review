@@ -109,6 +109,9 @@ fn risk_layer(args: &PromptArgs) -> ReviewLayer {
         Some("infra") => {
             checks.push("重点检查执行环境、触发条件、权限范围和失败回退策略".into());
         }
+        Some("contract") | Some("api") => {
+            checks.push("重点检查 API 契约变化、接口字段兼容性、版本管理和调用方影响".into());
+        }
         _ => {
             checks.push("根据变更文件与上下文评估潜在发布和兼容性风险".into());
         }
@@ -149,6 +152,7 @@ mod tests {
             files: vec![],
             focus: vec![],
             baseline_files: vec![],
+            incident_files: vec![],
             change_type: Some("db".into()),
             format: OutputFormat::Text,
         }

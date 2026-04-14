@@ -135,7 +135,9 @@ pub struct PromptArgs {
     pub focus: Vec<String>,
     #[arg(long = "baseline-file")]
     pub baseline_files: Vec<PathBuf>,
-    #[arg(long = "type", help = "Change type: server, db, frontend, infra")]
+    #[arg(long = "incident-file")]
+    pub incident_files: Vec<PathBuf>,
+    #[arg(long = "type", help = "Change type: server, db, frontend, infra, contract, api")]
     pub change_type: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
@@ -180,6 +182,7 @@ impl RunArgs {
             files,
             focus: self.prompt.focus.clone(),
             baseline_files: self.prompt.baseline_files.clone(),
+            incident_files: self.prompt.incident_files.clone(),
             change_type: self.prompt.change_type.clone(),
             format: self.prompt.format,
         }
@@ -279,6 +282,7 @@ impl DeepReviewArgs {
             files,
             focus: self.prompt.focus.clone(),
             baseline_files: self.prompt.baseline_files.clone(),
+            incident_files: self.prompt.incident_files.clone(),
             change_type: self.prompt.change_type.clone(),
             format: self.prompt.format,
         }
@@ -312,7 +316,8 @@ impl ReviewArgs {
             || !self.prompt_args.context_files.is_empty()
             || !self.prompt_args.files.is_empty()
             || !self.prompt_args.focus.is_empty()
-            || !self.prompt_args.baseline_files.is_empty();
+            || !self.prompt_args.baseline_files.is_empty()
+            || !self.prompt_args.incident_files.is_empty();
         if has_fields {
             Some(self.prompt_args.clone())
         } else {
