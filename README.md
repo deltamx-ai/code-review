@@ -256,6 +256,205 @@ code-review deep-review \
   --goal "修复重复下单"
 ```
 
+## HTTP API
+
+现在除了 CLI，也支持 HTTP API。
+
+### 启动服务
+
+默认监听 `127.0.0.1:3000`：
+
+```bash
+cargo run -- serve
+```
+
+自定义地址：
+
+```bash
+cargo run -- serve --bind 0.0.0.0:3000
+```
+
+### 接口列表
+
+- `GET /api/health`
+- `GET /api/models`
+- `POST /api/validate`
+- `POST /api/prompt`
+- `POST /api/assemble`
+- `POST /api/run`
+- `POST /api/review`
+- `POST /api/deep-review`
+
+### 1. 健康检查
+
+```bash
+curl -s http://127.0.0.1:3000/api/health | jq
+```
+
+返回示例：
+
+```json
+{
+  "ok": true,
+  "service": "code-review"
+}
+```
+
+### 2. 获取模型列表
+
+```bash
+curl -s http://127.0.0.1:3000/api/models | jq
+```
+
+### 3. 校验输入是否满足准入
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/validate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "standard",
+    "stack": "Rust + Axum + PostgreSQL",
+    "goal": "修复重复下单",
+    "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+    "files": ["src/order/service.rs"],
+    "format": "json"
+  }' | jq
+```
+
+### 4. 生成 review prompt
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/prompt \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "standard",
+    "stack": "Rust + Axum + PostgreSQL",
+    "goal": "修复重复下单",
+    "why": "线上偶发重复提交",
+    "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+    "expected_normal": "首次提交成功",
+    "expected_error": "重复提交返回冲突",
+    "expected_edge": "网络重试不应双写",
+    "files": ["src/order/service.rs"],
+    "format": "json"
+  }' | jq
+```
+
+### 5. 预览 assemble 结果
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/assemble \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "standard",
+    "jira": "PROJ-123",
+    "jira_base_url": "https://your-company.atlassian.net",
+    "jira_provider": "native",
+    "format": "json"
+  }' | jq
+```
+
+如果你没有 Jira，也可以直接传普通字段：
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/assemble \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "standard",
+    "goal": "修复重复下单",
+    "rules": ["一个订单只能支付一次"],
+    "files": ["src/order/service.rs"],
+    "format": "json"
+  }' | jq
+```
+
+### 6. 从 git diff 自动生成 prompt
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "git": "HEAD~1..HEAD",
+    "repo": ".",
+    "prompt": {
+      "mode": "standard",
+      "stack": "Rust + Axum + PostgreSQL",
+      "goal": "修复重复下单",
+      "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+      "format": "json"
+    },
+    "include_context": true,
+    "context_budget_bytes": 48000,
+    "context_file_max_bytes": 12000
+  }' | jq
+```
+
+### 7. 执行单轮 review
+
+> 需要先完成 `code-review auth login`，因为底层仍然调用本机 `copilot` CLI。
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/review \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-5.4",
+    "prompt_args": {
+      "mode": "standard",
+      "stack": "Rust + Axum + PostgreSQL",
+      "goal": "修复重复下单",
+      "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+      "expected_normal": "首次提交成功",
+      "files": ["src/order/service.rs"],
+      "format": "json"
+    }
+  }' | jq
+```
+
+返回中会包含：
+- `exit_code`
+- `result`
+- `validation_report`
+- `repair_attempted`
+- `repair_succeeded`
+
+### 8. 执行两阶段 deep-review
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/deep-review \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "git": "HEAD~1..HEAD",
+    "repo": ".",
+    "model": "gpt-5.4",
+    "prompt": {
+      "mode": "critical",
+      "stack": "Rust + Axum + PostgreSQL",
+      "goal": "修复重复下单",
+      "rules": ["一个订单只能支付一次", "幂等键必须生效"],
+      "focus": ["支付安全", "事务一致性"],
+      "format": "json"
+    },
+    "include_context": true,
+    "context_budget_bytes": 48000,
+    "context_file_max_bytes": 12000
+  }' | jq
+```
+
+### API 里的 exit_code 语义
+
+- `0`：执行成功，且无明显阻断问题
+- `2`：执行成功，但存在高风险或需要人工复核
+- `3`：输入不满足准入要求
+- `4`：输出结构化校验失败，repair 后仍不合格
+- `5`：运行时异常
+
+### 说明
+
+- API 当前是**同步接口**，`review` / `deep-review` 可能会等待较久
+- `review` / `deep-review` 的前提仍然是本机 `copilot` 已登录
+- `repo` 和 `diff` 仍然在本机文件系统与 git 仓库上下文中执行
+- 当前还没有做多用户隔离和任务队列，这一版更偏本地服务化入口
+
 ## Prompt 策略
 
 现在的 prompt 强调：

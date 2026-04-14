@@ -17,4 +17,7 @@
 - [x] 显式输出 validation_report / repair 状态
 - [x] 实现 CI 友好的 exit code，同时保留完整报告输出
 - [x] 实现 service 层抽象，迁移 review / deep-review 主流程
+- [x] 把 run / validate / prompt assemble 也抽进 services 层
+- [x] 实现 HTTP API 初版路由和 server 启动
+- [x] 补 API 使用文档 + curl 示例
 - [ ] ~提交并推送当前改动~ *(in progress)*
