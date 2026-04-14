@@ -315,26 +315,27 @@ fn extract_symbols(content: &str) -> Vec<String> {
     out.into_iter().collect()
 }
 
-fn defines_symbol(path: &str, content: &str, symbol: &str) -> bool {
-    let path_hit = path.to_lowercase().contains(&symbol.to_lowercase());
-    if path_hit {
-        return true;
-    }
-    content.lines().any(|line| {
+fn defines_symbol(_path: &str, content: &str, symbol: &str) -> bool {
+    for line in content.lines() {
         let l = line.trim();
-        l.starts_with("fn ")
-            || l.starts_with("pub fn ")
-            || l.starts_with("async fn ")
-            || l.starts_with("pub async fn ")
-            || l.starts_with("struct ")
-            || l.starts_with("pub struct ")
-            || l.starts_with("enum ")
-            || l.starts_with("pub enum ")
-            || l.starts_with("trait ")
-            || l.starts_with("pub trait ")
-            || l.starts_with("interface ")
-            || l.starts_with("class ")
-    }) && content.contains(symbol)
+        for prefix in [
+            "fn ", "pub fn ", "async fn ", "pub async fn ",
+            "struct ", "pub struct ", "enum ", "pub enum ",
+            "trait ", "pub trait ", "interface ", "class ",
+            "type ", "pub type ",
+        ] {
+            if let Some(rest) = l.strip_prefix(prefix) {
+                let name = rest
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("");
+                if name == symbol {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn references_symbol(content: &str, symbol: &str) -> bool {

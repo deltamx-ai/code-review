@@ -164,7 +164,17 @@ pub fn refresh(store: &SessionStore) -> Result<AuthStatus> {
         record.access_token = sanitize_token_field(&discover_token_preview());
     }
     store.save(&record)?;
-    status(store)
+    Ok(AuthStatus {
+        logged_in: probe.logged_in,
+        quota_exhausted: probe.quota_exhausted,
+        provider_source: Some(record.provider_source),
+        user: Some(record.user),
+        host: Some(record.host),
+        token_preview: Some(mask_token(&record.access_token)),
+        updated_at: Some(record.updated_at),
+        last_probe_at: record.last_probe_at,
+        last_error: record.last_error,
+    })
 }
 
 pub fn whoami(store: &SessionStore) -> Result<WhoAmI> {
