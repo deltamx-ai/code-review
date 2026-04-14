@@ -5,6 +5,7 @@ use crate::review_layers::{build_review_layers, render_layers_prompt};
 use crate::risk::analyze_risks;
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fs;
 
 #[derive(Debug, Serialize)]
@@ -53,11 +54,26 @@ pub struct PromptSummary {
     pub files: Vec<String>,
     pub context_files: Vec<String>,
     pub dependency_context_files: Vec<String>,
+    pub dependency_context_by_kind: BTreeMap<String, Vec<String>>,
     pub has_diff: bool,
 }
 
 impl PromptSummary {
     pub fn from_prompt_args(args: &PromptArgs) -> Self {
+        let mut dependency_context_files = Vec::new();
+        let mut dependency_context_by_kind: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for focus in &args.focus {
+            if let Some(rest) = focus.strip_prefix("dependency-context:") {
+                let mut parts = rest.splitn(2, ':');
+                let kind = parts.next().unwrap_or("unknown").trim().to_string();
+                let file = parts.next().unwrap_or(rest).trim().to_string();
+                if !file.is_empty() {
+                    dependency_context_files.push(file.clone());
+                    dependency_context_by_kind.entry(kind).or_default().push(file);
+                }
+            }
+        }
+
         Self {
             stack: args.stack.clone(),
             goal: args.goal.clone(),
@@ -71,11 +87,8 @@ impl PromptSummary {
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
-            dependency_context_files: args
-                .focus
-                .iter()
-                .filter_map(|f| f.strip_prefix("dependency-context:").map(|s| s.trim().to_string()))
-                .collect(),
+            dependency_context_files,
+            dependency_context_by_kind,
             has_diff: args.diff_file.is_some(),
         }
     }

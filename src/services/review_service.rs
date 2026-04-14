@@ -414,6 +414,7 @@ pub fn render_prompt_execution(format: OutputFormat, execution: &PromptExecution
                     files: execution.summary.files.clone(),
                     context_files: execution.summary.context_files.clone(),
                     dependency_context_files: execution.summary.dependency_context_files.clone(),
+                    dependency_context_by_kind: execution.summary.dependency_context_by_kind.clone(),
                     has_diff: execution.summary.has_diff,
                 },
             };
