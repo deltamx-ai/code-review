@@ -16,4 +16,5 @@
 - [x] 实现 result validation / repair 雏形
 - [x] 显式输出 validation_report / repair 状态
 - [x] 实现 CI 友好的 exit code，同时保留完整报告输出
-- [ ] ~跑全量测试并提交推送~ *(in progress)*
+- [x] 实现 service 层抽象，迁移 review / deep-review 主流程
+- [ ] ~提交并推送当前改动~ *(in progress)*

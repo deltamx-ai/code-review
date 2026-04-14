@@ -16,6 +16,7 @@ pub enum Commands {
     Assemble(PromptArgs),
     Run(RunArgs),
     DeepReview(DeepReviewArgs),
+    Serve(ServeArgs),
     Models {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
@@ -30,6 +31,12 @@ pub enum Commands {
     },
     Validate(PromptArgs),
     Review(ReviewArgs),
+}
+
+#[derive(Args, Debug, Clone, serde::Deserialize)]
+pub struct ServeArgs {
+    #[arg(long, default_value = "127.0.0.1:3000")]
+    pub bind: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -85,7 +92,7 @@ pub enum ReviewMode {
     Critical,
 }
 
-#[derive(Args, Debug, Clone, serde::Serialize)]
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PromptArgs {
     #[arg(long, value_enum, default_value_t = ReviewMode::Standard)]
     pub mode: ReviewMode,
@@ -133,7 +140,7 @@ pub struct PromptArgs {
     pub format: OutputFormat,
 }
 
-#[derive(Args, Debug, Clone, serde::Serialize)]
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunArgs {
     #[arg(long)]
     pub git: String,
@@ -178,7 +185,7 @@ impl RunArgs {
     }
 }
 
-#[derive(Args, Debug, Clone, serde::Serialize)]
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeepReviewArgs {
     #[arg(long)]
     pub git: String,
@@ -225,7 +232,7 @@ impl DeepReviewArgs {
     }
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, serde::Deserialize)]
 pub struct ReviewArgs {
     #[arg(long)]
     pub prompt: Option<String>,
@@ -261,7 +268,7 @@ impl ReviewArgs {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize)]
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     Text,
