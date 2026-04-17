@@ -2,9 +2,9 @@ use crate::admission::{AdmissionLevel, ReviewConfidence};
 use crate::cli::ReviewMode;
 use crate::review_validate::ReviewValidationReport;
 use crate::risk::RiskAnalysis;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReviewIssue {
     pub title: String,
     pub file: Option<String>,
@@ -15,20 +15,20 @@ pub struct ReviewIssue {
     pub suggestion: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MissingTestCase {
     pub title: String,
     pub scenario: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RiskHintView {
     pub title: String,
     pub detail: String,
     pub source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReviewResult {
     pub mode: String,
     pub input_ok: bool,
@@ -103,7 +103,10 @@ impl ReviewResult {
                 )
             };
         }
-        self.needs_human_review = !self.high_risk.is_empty() || !self.impact_scope.is_empty() || !self.release_checks.is_empty() || !self.risk_hints.is_empty();
+        self.needs_human_review = !self.high_risk.is_empty()
+            || !self.impact_scope.is_empty()
+            || !self.release_checks.is_empty()
+            || !self.risk_hints.is_empty();
     }
 }
 

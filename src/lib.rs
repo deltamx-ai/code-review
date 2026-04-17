@@ -7,7 +7,10 @@ pub mod copilot;
 pub mod expand;
 pub mod gitops;
 pub mod jira;
+pub mod conversation;
+pub mod conversation_store;
 pub mod models;
+pub mod orchestrator;
 pub mod prompt;
 pub mod review_layers;
 pub mod review_parser;
@@ -17,6 +20,7 @@ pub mod review_validate;
 pub mod risk;
 pub mod services;
 pub mod session;
+pub mod providers;
 
 use anyhow::{bail, Result};
 use clap::Parser;

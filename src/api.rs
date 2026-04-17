@@ -1,23 +1,30 @@
 use crate::cli::{AnalyzeArgs, DeepReviewArgs, PromptArgs, ReviewArgs, RunArgs};
 use crate::config::load_config;
+use crate::conversation::{ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn};
+use crate::conversation_store::ConversationStore;
 use crate::models;
+use crate::orchestrator::{
+    continue_session, start_session, ContinueReviewTurnRequest, StartReviewSessionRequest,
+};
+use crate::providers::copilot::CopilotCliProvider;
 use crate::services::review_service::{
     execute_analyze, execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
     execute_validate,
 };
 use crate::session::SessionStore;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::task;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 pub struct ApiState {
     pub store: SessionStore,
+    pub conversation_store: ConversationStore,
     pub cfg: crate::config::AppConfig,
 }
 
@@ -50,6 +57,9 @@ pub fn app(state: ApiState) -> Router {
         .route("/api/analyze", post(analyze_handler))
         .route("/api/review", post(review_handler))
         .route("/api/deep-review", post(deep_review_handler))
+        .route("/api/review-sessions", post(create_review_session_handler))
+        .route("/api/review-sessions/:id", get(get_review_session_handler))
+        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -57,7 +67,8 @@ pub fn app(state: ApiState) -> Router {
 pub async fn serve(bind: &str) -> anyhow::Result<()> {
     let cfg = load_config()?;
     let store = SessionStore::new_default()?;
-    let state = ApiState { store, cfg };
+    let conversation_store = ConversationStore::new_default()?;
+    let state = ApiState { store, conversation_store, cfg };
     let listener = tokio::net::TcpListener::bind(bind).await?;
     axum::serve(listener, app(state)).await?;
     Ok(())
@@ -204,6 +215,148 @@ async fn deep_review_handler(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateReviewSessionApiRequest {
+    pub repo_root: String,
+    pub review_mode: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub base_ref: Option<String>,
+    pub head_ref: Option<String>,
+    pub diff_text: Option<String>,
+    pub prompt_args: PromptArgs,
+    pub initial_instruction: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppendReviewTurnApiRequest {
+    pub instruction: Option<String>,
+    pub attached_files: Vec<String>,
+    pub extra_context: Vec<String>,
+    pub focus_finding_ids: Vec<String>,
+    pub finalize: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewSessionDetailApiResponse {
+    pub session: ReviewSession,
+    pub turns: Vec<ReviewTurn>,
+    pub messages: Vec<ReviewMessage>,
+    pub findings: Vec<ReviewFinding>,
+}
+
+async fn create_review_session_handler(
+    State(state): State<ApiState>,
+    Json(req): Json<CreateReviewSessionApiRequest>,
+) -> Result<Json<ReviewSessionDetailApiResponse>, ApiError> {
+    let review_mode = parse_review_mode(&req.review_mode)?;
+    let convo_store = state.conversation_store.clone();
+    let session_store = state.store.clone();
+    let result = task::spawn_blocking(move || {
+        let provider = CopilotCliProvider::new(session_store);
+        let orchestration = start_session(
+            &convo_store,
+            &provider,
+            StartReviewSessionRequest {
+                repo_root: req.repo_root.into(),
+                review_mode,
+                provider: req.provider,
+                model: req.model,
+                base_ref: req.base_ref,
+                head_ref: req.head_ref,
+                diff_text: req.diff_text,
+                prompt_args: req.prompt_args,
+                initial_instruction: req.initial_instruction,
+            },
+        )?;
+        let turns = convo_store.load_turns(&orchestration.session.id)?;
+        let messages = convo_store.load_messages(&orchestration.session.id)?;
+        let findings = convo_store.load_findings(&orchestration.session.id)?;
+        anyhow::Ok(ReviewSessionDetailApiResponse {
+            session: orchestration.session,
+            turns,
+            messages,
+            findings,
+        })
+    })
+    .await
+    .map_err(|e| api_error(anyhow::anyhow!("create review session task join error: {}", e)))?
+    .map_err(api_error)?;
+    Ok(Json(result))
+}
+
+async fn append_review_turn_handler(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    Json(req): Json<AppendReviewTurnApiRequest>,
+) -> Result<Json<ReviewSessionDetailApiResponse>, ApiError> {
+    let convo_store = state.conversation_store.clone();
+    let session_store = state.store.clone();
+    let result = task::spawn_blocking(move || {
+        let provider = CopilotCliProvider::new(session_store);
+        let orchestration = continue_session(
+            &convo_store,
+            &provider,
+            ContinueReviewTurnRequest {
+                session_id: id.clone(),
+                instruction: req.instruction,
+                attached_files: req.attached_files,
+                extra_context: req.extra_context,
+                focus_finding_ids: req.focus_finding_ids,
+                generate_final_report: req.finalize.unwrap_or(false),
+            },
+        )?;
+        let turns = convo_store.load_turns(&orchestration.session.id)?;
+        let messages = convo_store.load_messages(&orchestration.session.id)?;
+        let findings = convo_store.load_findings(&orchestration.session.id)?;
+        anyhow::Ok(ReviewSessionDetailApiResponse {
+            session: orchestration.session,
+            turns,
+            messages,
+            findings,
+        })
+    })
+    .await
+    .map_err(|e| api_error(anyhow::anyhow!("append review turn task join error: {}", e)))?
+    .map_err(api_error)?;
+    Ok(Json(result))
+}
+
+async fn get_review_session_handler(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<ReviewSessionDetailApiResponse>, ApiError> {
+    let convo_store = state.conversation_store.clone();
+    let result = task::spawn_blocking(move || {
+        let session = convo_store.load_session(&id)?;
+        let turns = convo_store.load_turns(&id)?;
+        let messages = convo_store.load_messages(&id)?;
+        let findings = convo_store.load_findings(&id)?;
+        anyhow::Ok(ReviewSessionDetailApiResponse {
+            session,
+            turns,
+            messages,
+            findings,
+        })
+    })
+    .await
+    .map_err(|e| api_error(anyhow::anyhow!("get review session task join error: {}", e)))?
+    .map_err(api_error)?;
+    Ok(Json(result))
+}
+
+fn parse_review_mode(mode: &str) -> Result<crate::cli::ReviewMode, ApiError> {
+    match mode.to_lowercase().as_str() {
+        "lite" => Ok(crate::cli::ReviewMode::Lite),
+        "standard" => Ok(crate::cli::ReviewMode::Standard),
+        "critical" => Ok(crate::cli::ReviewMode::Critical),
+        _ => Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            error: format!("invalid review_mode: {}", mode),
+        }),
+    }
+}
+
 fn api_error(err: anyhow::Error) -> ApiError {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
@@ -213,12 +366,10 @@ fn api_error(err: anyhow::Error) -> ApiError {
         StatusCode::CONFLICT
     } else if lower.contains("blocked") {
         StatusCode::UNPROCESSABLE_ENTITY
-    } else if lower.contains("git diff is empty") {
+    } else if lower.contains("session not found") || lower.contains("failed to read") || lower.contains("no such file") {
         StatusCode::NOT_FOUND
     } else if lower.contains("failed to parse") || lower.contains("provide --prompt") || lower.contains("is empty") || lower.contains("out of range") {
         StatusCode::BAD_REQUEST
-    } else if lower.contains("failed to read") || lower.contains("no such file") {
-        StatusCode::NOT_FOUND
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };
