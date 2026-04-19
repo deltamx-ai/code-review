@@ -68,6 +68,13 @@ cargo run -- serve --bind 0.0.0.0:3000
 - `POST /api/run`
 - `POST /api/review`
 - `POST /api/deep-review`
+- **多轮会话**：
+  - `GET /api/review-sessions`（列表）
+  - `POST /api/review-sessions`（创建）
+  - `GET /api/review-sessions/{id}`（详情）
+  - `DELETE /api/review-sessions/{id}`
+  - `POST /api/review-sessions/{id}/turns`（追问）
+  - `PATCH /api/review-sessions/{id}/findings/{finding_id}`（修改 finding 状态）
 
 ---
 
@@ -370,3 +377,97 @@ curl -s -X POST http://127.0.0.1:3000/api/deep-review \
 - 仍依赖本机 git 仓库和本机 `copilot` 登录态
 - `review` / `deep-review` 没有任务队列，耗时会直接阻塞请求
 - 还没有正式 OpenAPI 生成器，这份文档是当前接口契约草案
+
+---
+
+## 8. 多轮会话接口
+
+多轮会话在文件层面存储于 `~/.alma/review-sessions/<session_id>/`。
+
+### 8.1 创建会话 `POST /api/review-sessions`
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/review-sessions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "repo_root": "/home/alice/my-repo",
+    "review_mode": "standard",
+    "model": "gpt-5.4",
+    "diff_text": "--- a/foo.rs\n+++ b/foo.rs\n@@ ...",
+    "prompt_args": {
+      "mode": "standard",
+      "stack": "Rust",
+      "goal": "修复重复下单",
+      "rules": ["一个订单只能支付一次"],
+      "files": ["src/order/service.rs"],
+      "format": "json"
+    },
+    "initial_instruction": "请重点检查幂等"
+  }' | jq
+```
+
+返回 `ReviewSessionDetail`：`{ session, turns, messages, findings, artifacts }`。
+
+- 如果 admission 被 block，`session.status` 会是 `failed`，`session.last_error` 说明原因，**不会调用模型**。
+- `session.model` 记录的是默认 model；追问时可覆盖。
+
+### 8.2 列表 `GET /api/review-sessions`
+
+```bash
+curl -s 'http://127.0.0.1:3000/api/review-sessions?limit=20&status=running' | jq
+```
+
+返回 `{ items: SessionSummary[], total, limit, offset }`，按 `updated_at desc`。
+
+### 8.3 详情 `GET /api/review-sessions/{id}`
+
+```bash
+curl -s http://127.0.0.1:3000/api/review-sessions/rs-abc123 | jq
+```
+
+### 8.4 追问 `POST /api/review-sessions/{id}/turns`
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/review-sessions/rs-abc123/turns \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "instruction": "请进一步核对事务边界",
+    "attached_files": ["src/order/service.rs"],
+    "focus_finding_ids": ["finding-xxx"],
+    "model": "gpt-5.4",
+    "finalize": false
+  }' | jq
+```
+
+- `model` 可选；非空则本轮用该 model 进行推理，**session.model 不变**。
+- `attached_files` 路径相对于 `session.repo_root`，文件内容会按预算（32KB 总量 / 10KB 单文件）读入 prompt。
+- `finalize: true` 触发最终报告生成，状态迁至 `completed`。
+
+### 8.5 修改 finding 状态 `PATCH /api/review-sessions/{id}/findings/{finding_id}`
+
+```bash
+curl -s -X PATCH http://127.0.0.1:3000/api/review-sessions/rs-abc123/findings/finding-xxx \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "status": "confirmed",
+    "owner": "alice",
+    "tags": ["manual-reviewed"]
+  }' | jq
+```
+
+- `status` 流转规则：
+  - 任意状态 ↔ `suspected | confirmed | dismissed`
+  - `suspected | confirmed` → `fixed | accepted_risk`
+  - `fixed ↔ accepted_risk` 互转允许
+  - `dismissed` → `fixed / accepted_risk` 禁止（先转 confirmed 再转）
+- 非法流转返回 `409`。
+- `fixed / accepted_risk` 自动填入 `resolved_at`。
+
+### 8.6 删除 `DELETE /api/review-sessions/{id}`
+
+```bash
+curl -s -X DELETE http://127.0.0.1:3000/api/review-sessions/rs-abc123 -o /dev/null -w '%{http_code}\n'
+# 204
+```
+
+路径里含 `..` / `/` / `\` 的 id 会被 400 拒绝。

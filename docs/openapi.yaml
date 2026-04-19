@@ -248,6 +248,142 @@ paths:
                 $ref: '#/components/schemas/DeepReviewApiResponse'
         '400':
           $ref: '#/components/responses/ApiErrorResponse'
+  /api/review-sessions:
+    get:
+      summary: List review sessions
+      operationId: listReviewSessions
+      tags: [sessions]
+      parameters:
+        - in: query
+          name: repo
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: mode
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Paginated session summaries ordered by updated_at desc
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionListResponse'
+    post:
+      summary: Create a new multi-turn review session
+      operationId: createReviewSession
+      tags: [sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReviewSessionRequest'
+      responses:
+        '200':
+          description: Session detail after turn 1 (or Failed status if admission blocked)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSessionDetail'
+        '400':
+          $ref: '#/components/responses/ApiErrorResponse'
+  /api/review-sessions/{id}:
+    get:
+      summary: Get full detail of a review session
+      operationId: getReviewSession
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session detail (session + turns + messages + findings + artifacts)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSessionDetail'
+        '404':
+          $ref: '#/components/responses/ApiErrorResponse'
+    delete:
+      summary: Permanently delete a session and its artifacts
+      operationId: deleteReviewSession
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/ApiErrorResponse'
+  /api/review-sessions/{id}/turns:
+    post:
+      summary: Append a follow-up turn to the session
+      operationId: appendReviewTurn
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendReviewTurnRequest'
+      responses:
+        '200':
+          description: Updated session detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSessionDetail'
+        '404':
+          $ref: '#/components/responses/ApiErrorResponse'
+  /api/review-sessions/{id}/findings/{finding_id}:
+    patch:
+      summary: Update a finding's status / owner / tags
+      operationId: updateReviewFinding
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: finding_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindingPatch'
+      responses:
+        '200':
+          description: Updated finding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewFinding'
+        '404':
+          $ref: '#/components/responses/ApiErrorResponse'
+        '409':
+          $ref: '#/components/responses/ApiErrorResponse'
 components:
   responses:
     ApiErrorResponse:
@@ -648,30 +784,237 @@ components:
           $ref: '#/components/schemas/ReviewResult'
         stage2:
           $ref: '#/components/schemas/ReviewResult'
-tView'
-        validation_report:
-          allOf:
-            - $ref: '#/components/schemas/ReviewValidationReport'
-          nullable: true
-        repair_attempted:
-          type: boolean
-        repair_succeeded:
-          type: boolean
-        raw_text:
-          type: string
-    ReviewApiResponse:
+    ConversationStatus:
+      type: string
+      enum: [created, running, waiting_input, completed, failed, cancelled]
+    TurnKind:
+      type: string
+      enum: [discovery, deep_dive, business_check, final_report, manual_followup]
+    TurnStatus:
+      type: string
+      enum: [pending, running, completed, failed, skipped]
+    MessageRole:
+      type: string
+      enum: [system, user, assistant, tool]
+    FindingSeverity:
+      type: string
+      enum: [critical, high, medium, low, info]
+    FindingStatus:
+      type: string
+      enum: [suspected, confirmed, dismissed, fixed, accepted_risk]
+    FindingCategory:
+      type: string
+      enum: [logic, security, performance, compatibility, data, testability, release, maintainability, style, unknown]
+    ArtifactType:
+      type: string
+      enum: [diff, context_file, prompt, response, report, jira, test_result, snapshot, other]
+    FindingCounts:
       type: object
       properties:
-        exit_code:
-          type: integer
-        result:
-          $ref: '#/components/schemas/ReviewResult'
-    DeepReviewApiResponse:
+        total: { type: integer }
+        high: { type: integer }
+        medium: { type: integer }
+        low: { type: integer }
+        confirmed: { type: integer }
+        dismissed: { type: integer }
+    SessionSummary:
+      type: object
+      required: [id, status, review_mode, repo_root, provider, model, current_turn, total_turns, finding_counts, created_at, updated_at]
+      properties:
+        id: { type: string }
+        title: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/ConversationStatus' }
+        review_mode: { $ref: '#/components/schemas/ReviewMode' }
+        repo_root: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        current_turn: { type: integer }
+        total_turns: { type: integer }
+        finding_counts: { $ref: '#/components/schemas/FindingCounts' }
+        admission_ok: { type: boolean, nullable: true }
+        last_error: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+        completed_at: { type: string, nullable: true }
+    AdmissionSnapshot:
       type: object
       properties:
-        exit_code:
-          type: integer
-        stage1:
-          $ref: '#/components/schemas/ReviewResult'
-        stage2:
-          $ref: '#/components/schemas/ReviewResult'
+        ok: { type: boolean }
+        level: { type: string }
+        score: { type: integer }
+        confidence: { type: string }
+        block_reasons: { type: array, items: { type: string } }
+        missing_required: { type: array, items: { type: string } }
+    CodeLocation:
+      type: object
+      properties:
+        file_path: { type: string }
+        line_start: { type: integer, nullable: true }
+        line_end: { type: integer, nullable: true }
+        symbol: { type: string, nullable: true }
+    FindingEvidence:
+      type: object
+      properties:
+        kind: { type: string }
+        summary: { type: string }
+        content: { type: string, nullable: true }
+        artifact_id: { type: string, nullable: true }
+    ReviewFinding:
+      type: object
+      required: [id, session_id, severity, category, status, title, description, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string, nullable: true }
+        session_id: { type: string }
+        source_turn_id: { type: string, nullable: true }
+        severity: { $ref: '#/components/schemas/FindingSeverity' }
+        category: { $ref: '#/components/schemas/FindingCategory' }
+        status: { $ref: '#/components/schemas/FindingStatus' }
+        title: { type: string }
+        description: { type: string }
+        rationale: { type: string, nullable: true }
+        suggestion: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        owner: { type: string, nullable: true }
+        location: { $ref: '#/components/schemas/CodeLocation' }
+        evidence: { type: array, items: { $ref: '#/components/schemas/FindingEvidence' } }
+        related_files: { type: array, items: { type: string } }
+        tags: { type: array, items: { type: string } }
+        last_seen_turn: { type: integer, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+        resolved_at: { type: string, nullable: true }
+    ReviewMessage:
+      type: object
+      required: [id, session_id, seq_no, role, content, format, created_at]
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        turn_id: { type: string, nullable: true }
+        seq_no: { type: integer }
+        role: { $ref: '#/components/schemas/MessageRole' }
+        author: { type: string, nullable: true }
+        content: { type: string }
+        format: { type: string, enum: [text, markdown, json] }
+        created_at: { type: string }
+    ReviewTurn:
+      type: object
+      required: [id, session_id, turn_no, kind, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        turn_no: { type: integer }
+        kind: { $ref: '#/components/schemas/TurnKind' }
+        status: { $ref: '#/components/schemas/TurnStatus' }
+        input_summary: { type: string, nullable: true }
+        instruction: { type: string, nullable: true }
+        requested_files: { type: array, items: { type: string } }
+        attached_files: { type: array, items: { type: string } }
+        focus_finding_ids: { type: array, items: { type: string } }
+        prompt_text: { type: string, nullable: true }
+        response_text: { type: string, nullable: true }
+        parsed_result: { $ref: '#/components/schemas/ReviewResult' }
+        token_input: { type: integer, nullable: true }
+        token_output: { type: integer, nullable: true }
+        latency_ms: { type: integer, nullable: true }
+        started_at: { type: string, nullable: true }
+        completed_at: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+    ReviewConversationState:
+      type: object
+      properties:
+        requested_files: { type: array, items: { type: string } }
+        attached_files: { type: array, items: { type: string } }
+        findings: { type: array, items: { $ref: '#/components/schemas/ReviewFinding' } }
+        pending_finding_ids: { type: array, items: { type: string } }
+        confirmed_finding_ids: { type: array, items: { type: string } }
+        dismissed_finding_ids: { type: array, items: { type: string } }
+        release_checks: { type: array, items: { type: string } }
+        impact_scope: { type: array, items: { type: string } }
+    ReviewSession:
+      type: object
+      required: [id, status, review_mode, strategy, repo_root, provider, model, current_turn, total_turns, state, created_at, updated_at]
+      properties:
+        id: { type: string }
+        title: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/ConversationStatus' }
+        review_mode: { $ref: '#/components/schemas/ReviewMode' }
+        strategy: { type: string }
+        repo_root: { type: string }
+        base_ref: { type: string, nullable: true }
+        head_ref: { type: string, nullable: true }
+        provider: { type: string }
+        model: { type: string }
+        temperature: { type: number, nullable: true }
+        current_turn: { type: integer }
+        total_turns: { type: integer }
+        admission: { $ref: '#/components/schemas/AdmissionSnapshot' }
+        state: { $ref: '#/components/schemas/ReviewConversationState' }
+        final_summary: { type: string, nullable: true }
+        final_report: { $ref: '#/components/schemas/ReviewResult' }
+        last_error: { type: string, nullable: true }
+        created_by: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+        completed_at: { type: string, nullable: true }
+    ReviewArtifact:
+      type: object
+      required: [id, session_id, artifact_type, name, created_at]
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        turn_id: { type: string, nullable: true }
+        artifact_type: { $ref: '#/components/schemas/ArtifactType' }
+        name: { type: string }
+        path: { type: string, nullable: true }
+        content: { type: string, nullable: true }
+        mime_type: { type: string, nullable: true }
+        size_bytes: { type: integer, nullable: true }
+        hash: { type: string, nullable: true }
+        created_at: { type: string }
+    ReviewSessionDetail:
+      type: object
+      required: [session, turns, messages, findings, artifacts]
+      properties:
+        session: { $ref: '#/components/schemas/ReviewSession' }
+        turns: { type: array, items: { $ref: '#/components/schemas/ReviewTurn' } }
+        messages: { type: array, items: { $ref: '#/components/schemas/ReviewMessage' } }
+        findings: { type: array, items: { $ref: '#/components/schemas/ReviewFinding' } }
+        artifacts: { type: array, items: { $ref: '#/components/schemas/ReviewArtifact' } }
+    CreateReviewSessionRequest:
+      type: object
+      required: [repo_root, review_mode, prompt_args]
+      properties:
+        repo_root: { type: string }
+        review_mode: { $ref: '#/components/schemas/ReviewMode' }
+        provider: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        base_ref: { type: string, nullable: true }
+        head_ref: { type: string, nullable: true }
+        diff_text: { type: string, nullable: true }
+        prompt_args: { $ref: '#/components/schemas/PromptArgs' }
+        initial_instruction: { type: string, nullable: true }
+    AppendReviewTurnRequest:
+      type: object
+      properties:
+        instruction: { type: string, nullable: true }
+        attached_files: { type: array, items: { type: string } }
+        extra_context: { type: array, items: { type: string } }
+        focus_finding_ids: { type: array, items: { type: string } }
+        finalize: { type: boolean, nullable: true }
+        model: { type: string, nullable: true, description: 'Optional per-turn model override; does not change session.model' }
+    FindingPatch:
+      type: object
+      properties:
+        status: { $ref: '#/components/schemas/FindingStatus' }
+        owner: { type: string, nullable: true }
+        tags: { type: array, items: { type: string }, nullable: true }
+    SessionListResponse:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/SessionSummary' } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }

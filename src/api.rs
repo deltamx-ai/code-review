@@ -1,6 +1,9 @@
 use crate::cli::{AnalyzeArgs, DeepReviewArgs, PromptArgs, ReviewArgs, RunArgs};
 use crate::config::load_config;
-use crate::conversation::{ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn};
+use crate::conversation::{
+    FindingPatch, ReviewArtifact, ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn,
+    SessionListFilter, SessionSummary,
+};
 use crate::conversation_store::ConversationStore;
 use crate::models;
 use crate::orchestrator::{
@@ -12,12 +15,13 @@ use crate::services::review_service::{
     execute_validate,
 };
 use crate::session::SessionStore;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::task;
 use tower_http::cors::CorsLayer;
 
@@ -58,9 +62,19 @@ pub fn app(state: ApiState) -> Router {
         .route("/api/analyze", post(analyze_handler))
         .route("/api/review", post(review_handler))
         .route("/api/deep-review", post(deep_review_handler))
-        .route("/api/review-sessions", post(create_review_session_handler))
-        .route("/api/review-sessions/:id", get(get_review_session_handler))
-        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler));
+        .route(
+            "/api/review-sessions",
+            get(list_review_sessions_handler).post(create_review_session_handler),
+        )
+        .route(
+            "/api/review-sessions/:id",
+            get(get_review_session_handler).delete(delete_review_session_handler),
+        )
+        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler))
+        .route(
+            "/api/review-sessions/:id/findings/:finding_id",
+            patch(update_review_finding_handler),
+        );
     let router = if cors_permissive {
         router.layer(CorsLayer::permissive())
     } else {
@@ -236,10 +250,14 @@ pub struct CreateReviewSessionApiRequest {
 #[derive(Debug, Deserialize)]
 pub struct AppendReviewTurnApiRequest {
     pub instruction: Option<String>,
+    #[serde(default)]
     pub attached_files: Vec<String>,
+    #[serde(default)]
     pub extra_context: Vec<String>,
+    #[serde(default)]
     pub focus_finding_ids: Vec<String>,
     pub finalize: Option<bool>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,6 +266,41 @@ pub struct ReviewSessionDetailApiResponse {
     pub turns: Vec<ReviewTurn>,
     pub messages: Vec<ReviewMessage>,
     pub findings: Vec<ReviewFinding>,
+    pub artifacts: Vec<ReviewArtifact>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionListApiResponse {
+    pub items: Vec<SessionSummary>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+async fn list_review_sessions_handler(
+    State(state): State<ApiState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<SessionListApiResponse>, ApiError> {
+    let convo_store = state.conversation_store.clone();
+    let filter = SessionListFilter {
+        repo: params.get("repo").cloned(),
+        status: params.get("status").cloned(),
+        mode: params.get("mode").cloned(),
+        limit: params.get("limit").and_then(|v| v.parse().ok()),
+        offset: params.get("offset").and_then(|v| v.parse().ok()),
+    };
+    let limit = filter.limit.unwrap_or(20);
+    let offset = filter.offset.unwrap_or(0);
+    let filter_for_count = filter.clone();
+    let filter_for_list = filter.clone();
+    let result: Result<SessionListApiResponse, anyhow::Error> = task::spawn_blocking(move || {
+        let total = convo_store.count_sessions(&filter_for_count)?;
+        let items = convo_store.list_sessions(&filter_for_list)?;
+        Ok(SessionListApiResponse { items, total, limit, offset })
+    })
+    .await
+    .map_err(|e| api_error(anyhow::anyhow!("list sessions task join error: {}", e)))?;
+    Ok(Json(result.map_err(api_error)?))
 }
 
 async fn create_review_session_handler(
@@ -257,6 +310,7 @@ async fn create_review_session_handler(
     let review_mode = parse_review_mode(&req.review_mode)?;
     let convo_store = state.conversation_store.clone();
     let session_store = state.store.clone();
+    let default_model = state.cfg.llm.model.clone();
     let result = task::spawn_blocking(move || {
         let provider = CopilotCliProvider::new(session_store);
         let orchestration = start_session(
@@ -266,7 +320,7 @@ async fn create_review_session_handler(
                 repo_root: req.repo_root.into(),
                 review_mode,
                 provider: req.provider,
-                model: req.model,
+                model: req.model.or(default_model),
                 base_ref: req.base_ref,
                 head_ref: req.head_ref,
                 diff_text: req.diff_text,
@@ -277,11 +331,13 @@ async fn create_review_session_handler(
         let turns = convo_store.load_turns(&orchestration.session.id)?;
         let messages = convo_store.load_messages(&orchestration.session.id)?;
         let findings = convo_store.load_findings(&orchestration.session.id)?;
+        let artifacts = convo_store.list_artifacts(&orchestration.session.id)?;
         anyhow::Ok(ReviewSessionDetailApiResponse {
             session: orchestration.session,
             turns,
             messages,
             findings,
+            artifacts,
         })
     })
     .await
@@ -309,16 +365,19 @@ async fn append_review_turn_handler(
                 extra_context: req.extra_context,
                 focus_finding_ids: req.focus_finding_ids,
                 generate_final_report: req.finalize.unwrap_or(false),
+                model: req.model,
             },
         )?;
         let turns = convo_store.load_turns(&orchestration.session.id)?;
         let messages = convo_store.load_messages(&orchestration.session.id)?;
         let findings = convo_store.load_findings(&orchestration.session.id)?;
+        let artifacts = convo_store.list_artifacts(&orchestration.session.id)?;
         anyhow::Ok(ReviewSessionDetailApiResponse {
             session: orchestration.session,
             turns,
             messages,
             findings,
+            artifacts,
         })
     })
     .await
@@ -337,17 +396,51 @@ async fn get_review_session_handler(
         let turns = convo_store.load_turns(&id)?;
         let messages = convo_store.load_messages(&id)?;
         let findings = convo_store.load_findings(&id)?;
+        let artifacts = convo_store.list_artifacts(&id)?;
         anyhow::Ok(ReviewSessionDetailApiResponse {
             session,
             turns,
             messages,
             findings,
+            artifacts,
         })
     })
     .await
     .map_err(|e| api_error(anyhow::anyhow!("get review session task join error: {}", e)))?
     .map_err(api_error)?;
     Ok(Json(result))
+}
+
+async fn delete_review_session_handler(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let convo_store = state.conversation_store.clone();
+    task::spawn_blocking(move || convo_store.delete_session(&id))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("delete session task join error: {}", e)))?
+        .map_err(api_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_review_finding_handler(
+    State(state): State<ApiState>,
+    Path((id, finding_id)): Path<(String, String)>,
+    Json(patch): Json<FindingPatch>,
+) -> Result<Json<ReviewFinding>, ApiError> {
+    let convo_store = state.conversation_store.clone();
+    let now = chrono_like_now();
+    let result = task::spawn_blocking(move || convo_store.update_finding(&id, &finding_id, &patch, &now))
+        .await
+        .map_err(|e| api_error(anyhow::anyhow!("update finding task join error: {}", e)))?
+        .map_err(api_error)?;
+    Ok(Json(result))
+}
+
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    secs.to_string()
 }
 
 fn parse_review_mode(mode: &str) -> Result<crate::cli::ReviewMode, ApiError> {
@@ -369,11 +462,23 @@ fn api_error(err: anyhow::Error) -> ApiError {
         StatusCode::UNAUTHORIZED
     } else if lower.contains("critical 模式必须使用两阶段 review") {
         StatusCode::CONFLICT
+    } else if lower.contains("invalid status transition") {
+        StatusCode::CONFLICT
     } else if lower.contains("blocked") {
         StatusCode::UNPROCESSABLE_ENTITY
-    } else if lower.contains("session not found") || lower.contains("failed to read") || lower.contains("no such file") {
+    } else if lower.contains("session not found")
+        || lower.contains("finding not found")
+        || lower.contains("failed to read")
+        || lower.contains("no such file")
+    {
         StatusCode::NOT_FOUND
-    } else if lower.contains("failed to parse") || lower.contains("provide --prompt") || lower.contains("is empty") || lower.contains("out of range") {
+    } else if lower.contains("invalid session id")
+        || lower.contains("failed to parse")
+        || lower.contains("provide --prompt")
+        || lower.contains("is empty")
+        || lower.contains("out of range")
+        || lower.contains("invalid review_mode")
+    {
         StatusCode::BAD_REQUEST
     } else {
         StatusCode::INTERNAL_SERVER_ERROR

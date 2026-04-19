@@ -1,7 +1,10 @@
+use crate::admission::check_admission;
 use crate::cli::{PromptArgs, ReviewMode};
+use crate::context::read_repo_context_with_budget;
 use crate::conversation::{
-    CodeLocation, ContentFormat, ConversationStatus, FindingCategory, FindingEvidence, FindingSeverity,
-    FindingStatus, MessageRole, ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn, TurnKind, TurnStatus,
+    ArtifactType, CodeLocation, ContentFormat, ConversationStatus, FindingCategory,
+    FindingEvidence, FindingSeverity, FindingStatus, MessageRole, ReviewArtifact, ReviewFinding,
+    ReviewMessage, ReviewSession, ReviewTurn, TurnKind, TurnStatus,
 };
 use crate::conversation_store::ConversationStore;
 use crate::providers::{ChatInputMessage, ChatRequest, LlmProvider};
@@ -9,8 +12,11 @@ use crate::review_parser::parse_review_text;
 use crate::review_schema::{ReviewIssue, ReviewResult};
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const ATTACHED_FILES_BUDGET_BYTES: usize = 32_000;
+const ATTACHED_FILE_MAX_BYTES: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct StartReviewSessionRequest {
@@ -33,6 +39,7 @@ pub struct ContinueReviewTurnRequest {
     pub extra_context: Vec<String>,
     pub focus_finding_ids: Vec<String>,
     pub generate_final_report: bool,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,18 +62,73 @@ pub fn start_session(
         session_id.clone(),
         req.review_mode,
         "conversation",
-        req.repo_root,
+        req.repo_root.clone(),
         req.provider.unwrap_or_else(|| provider.name().to_string()),
         req.model.clone().unwrap_or_else(|| "default".into()),
         now.clone(),
     );
-    session.base_ref = req.base_ref;
-    session.head_ref = req.head_ref;
+    session.base_ref = req.base_ref.clone();
+    session.head_ref = req.head_ref.clone();
+
+    let has_diff = req
+        .diff_text
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || req.prompt_args.diff_file.is_some();
+    let has_context =
+        !req.prompt_args.context_files.is_empty() || !req.prompt_args.files.is_empty();
+    let admission = check_admission(&req.prompt_args, has_diff, has_context);
+    session.attach_admission(&admission);
+
+    if !admission.ok {
+        session.status = ConversationStatus::Failed;
+        session.last_error = Some(format!(
+            "admission blocked: {}",
+            admission.block_reasons.join(" | ")
+        ));
+        session.updated_at = now.clone();
+        store.save_session(&session)?;
+        let turn = ReviewTurn {
+            id: new_id("turn"),
+            session_id: session.id.clone(),
+            turn_no: 0,
+            kind: TurnKind::Discovery,
+            status: TurnStatus::Skipped,
+            input_summary: Some("admission blocked".into()),
+            instruction: None,
+            requested_files: Vec::new(),
+            attached_files: Vec::new(),
+            focus_finding_ids: Vec::new(),
+            prompt_text: None,
+            response_text: None,
+            parsed_result: None,
+            token_input: None,
+            token_output: None,
+            latency_ms: None,
+            started_at: Some(now.clone()),
+            completed_at: Some(now.clone()),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+        return Ok(ReviewOrchestrationResult {
+            session,
+            turn,
+            new_messages: Vec::new(),
+            new_findings: Vec::new(),
+            final_report: None,
+        });
+    }
+
     session.status = ConversationStatus::Running;
 
     let turn_id = new_id("turn");
     let system_text = build_system_prompt(req.review_mode);
-    let user_text = build_initial_user_prompt(&req.prompt_args, req.diff_text.as_deref(), req.initial_instruction.as_deref());
+    let user_text = build_initial_user_prompt(
+        &req.prompt_args,
+        req.diff_text.as_deref(),
+        req.initial_instruction.as_deref(),
+    );
 
     let messages = vec![
         ReviewMessage {
@@ -95,6 +157,8 @@ pub fn start_session(
         },
     ];
 
+    let prompt_text = render_prompt_text(&messages);
+
     let chat_req = ChatRequest {
         model: session.model.clone(),
         messages: to_chat_messages(&messages),
@@ -120,18 +184,25 @@ pub fn start_session(
         created_at: now.clone(),
     };
 
+    let attached_files: Vec<String> = req
+        .prompt_args
+        .context_files
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+
     let turn = ReviewTurn {
-        id: turn_id,
+        id: turn_id.clone(),
         session_id: session_id.clone(),
         turn_no: 1,
         kind: TurnKind::Discovery,
         status: TurnStatus::Completed,
         input_summary: Some("initial review turn".into()),
-        instruction: req.initial_instruction,
+        instruction: req.initial_instruction.clone(),
         requested_files: Vec::new(),
-        attached_files: req.prompt_args.context_files.iter().map(|p| p.display().to_string()).collect(),
+        attached_files: attached_files.clone(),
         focus_finding_ids: new_findings.iter().map(|f| f.id.clone()).collect(),
-        prompt_text: None,
+        prompt_text: Some(prompt_text.clone()),
         response_text: Some(response.content.clone()),
         parsed_result: Some(parsed.clone()),
         token_input: response.usage.as_ref().and_then(|u| u.input_tokens),
@@ -146,6 +217,7 @@ pub fn start_session(
     session.current_turn = 1;
     session.total_turns = 1;
     session.updated_at = now.clone();
+    session.state.attached_files = attached_files;
 
     store.save_session(&session)?;
     store.save_turn(&turn)?;
@@ -154,6 +226,15 @@ pub fn start_session(
     }
     store.append_message(&assistant_msg)?;
     store.save_findings(&session.id, &session.state.findings)?;
+    save_turn_artifacts(
+        store,
+        &session.id,
+        &turn_id,
+        &now,
+        Some(&prompt_text),
+        Some(&response.content),
+        req.diff_text.as_deref(),
+    );
 
     Ok(ReviewOrchestrationResult {
         session,
@@ -181,7 +262,9 @@ pub fn continue_session(
     let turn_no = session.total_turns + 1;
     let turn_id = new_id("turn");
 
-    let user_text = build_continue_user_prompt(&req);
+    let attached_contents = read_attached_file_contents(&session.repo_root, &req.attached_files);
+
+    let user_text = build_continue_user_prompt(&req, &attached_contents, &session);
     let user_msg = ReviewMessage {
         id: new_id("msg"),
         session_id: session.id.clone(),
@@ -198,14 +281,17 @@ pub fn continue_session(
     let mut all_messages = history.clone();
     all_messages.push(user_msg.clone());
 
+    let turn_model = req.model.clone().unwrap_or_else(|| session.model.clone());
     let chat_req = ChatRequest {
-        model: session.model.clone(),
+        model: turn_model.clone(),
         messages: to_chat_messages(&all_messages),
         temperature: session.temperature,
         max_tokens: None,
         metadata: BTreeMap::new(),
     };
     let response = provider.chat(&chat_req)?;
+
+    let prompt_text = render_prompt_text(&all_messages);
 
     let parsed = parse_review_text(session.review_mode, &response.content, vec![]);
     let mut new_findings = findings_from_result(&session.id, &turn_id, turn_no, &now, &parsed);
@@ -241,7 +327,7 @@ pub fn continue_session(
     };
 
     let turn = ReviewTurn {
-        id: turn_id,
+        id: turn_id.clone(),
         session_id: session.id.clone(),
         turn_no,
         kind: if req.generate_final_report { TurnKind::FinalReport } else { TurnKind::DeepDive },
@@ -251,7 +337,7 @@ pub fn continue_session(
         requested_files: Vec::new(),
         attached_files: req.attached_files.clone(),
         focus_finding_ids: deduped.iter().map(|f| f.id.clone()).collect(),
-        prompt_text: None,
+        prompt_text: Some(prompt_text.clone()),
         response_text: Some(response.content.clone()),
         parsed_result: Some(parsed.clone()),
         token_input: response.usage.as_ref().and_then(|u| u.input_tokens),
@@ -266,14 +352,37 @@ pub fn continue_session(
     session.current_turn = turn_no;
     session.total_turns = turn_no;
     session.updated_at = now.clone();
-    session.state.attached_files.extend(req.attached_files.clone());
-    session.state.requested_files.extend(req.extra_context.clone());
+    for file in &req.attached_files {
+        if !session.state.attached_files.contains(file) {
+            session.state.attached_files.push(file.clone());
+        }
+    }
+    for ctx in &req.extra_context {
+        if !session.state.requested_files.contains(ctx) {
+            session.state.requested_files.push(ctx.clone());
+        }
+    }
+    if req.model.is_some() {
+        session
+            .state
+            .extra
+            .insert(format!("turn_{}_model", turn_no), turn_model.clone());
+    }
 
     store.save_turn(&turn)?;
     store.append_message(&user_msg)?;
     store.append_message(&assistant_msg)?;
     store.save_findings(&session.id, &existing_findings)?;
     store.save_session(&session)?;
+    save_turn_artifacts(
+        store,
+        &session.id,
+        &turn_id,
+        &now,
+        Some(&prompt_text),
+        Some(&response.content),
+        None,
+    );
 
     Ok(ReviewOrchestrationResult {
         session,
@@ -282,6 +391,104 @@ pub fn continue_session(
         new_findings: deduped,
         final_report,
     })
+}
+
+fn read_attached_file_contents(repo_root: &Path, files: &[String]) -> Vec<(String, String, bool)> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let repo = repo_root.to_path_buf();
+    match read_repo_context_with_budget(
+        &repo,
+        files,
+        ATTACHED_FILES_BUDGET_BYTES,
+        ATTACHED_FILE_MAX_BYTES,
+    ) {
+        Ok(collection) => collection
+            .files
+            .into_iter()
+            .map(|f| (f.path, f.content, f.truncated))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_turn_artifacts(
+    store: &ConversationStore,
+    session_id: &str,
+    turn_id: &str,
+    now: &str,
+    prompt: Option<&str>,
+    response: Option<&str>,
+    diff: Option<&str>,
+) {
+    if let Some(text) = prompt {
+        let artifact = ReviewArtifact {
+            id: new_id("art"),
+            session_id: session_id.into(),
+            turn_id: Some(turn_id.into()),
+            artifact_type: ArtifactType::Prompt,
+            name: "prompt.txt".into(),
+            path: None,
+            content: Some(text.to_string()),
+            mime_type: Some("text/plain".into()),
+            size_bytes: Some(text.len() as u64),
+            hash: None,
+            meta: BTreeMap::new(),
+            created_at: now.into(),
+        };
+        let _ = store.save_artifact(&artifact);
+    }
+    if let Some(text) = response {
+        let artifact = ReviewArtifact {
+            id: new_id("art"),
+            session_id: session_id.into(),
+            turn_id: Some(turn_id.into()),
+            artifact_type: ArtifactType::Response,
+            name: "response.txt".into(),
+            path: None,
+            content: Some(text.to_string()),
+            mime_type: Some("text/plain".into()),
+            size_bytes: Some(text.len() as u64),
+            hash: None,
+            meta: BTreeMap::new(),
+            created_at: now.into(),
+        };
+        let _ = store.save_artifact(&artifact);
+    }
+    if let Some(text) = diff {
+        if !text.trim().is_empty() {
+            let artifact = ReviewArtifact {
+                id: new_id("art"),
+                session_id: session_id.into(),
+                turn_id: Some(turn_id.into()),
+                artifact_type: ArtifactType::Diff,
+                name: "diff.patch".into(),
+                path: None,
+                content: Some(text.to_string()),
+                mime_type: Some("text/x-diff".into()),
+                size_bytes: Some(text.len() as u64),
+                hash: None,
+                meta: BTreeMap::new(),
+                created_at: now.into(),
+            };
+            let _ = store.save_artifact(&artifact);
+        }
+    }
+}
+
+fn render_prompt_text(messages: &[ReviewMessage]) -> String {
+    let mut out = String::new();
+    for m in messages {
+        let role = match m.role {
+            MessageRole::System => "system",
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+        };
+        out.push_str(&format!("[{}]\n{}\n\n", role, m.content));
+    }
+    out
 }
 
 fn findings_from_result(
@@ -333,6 +540,7 @@ fn append_issue_findings(
                 FindingSeverity::Low => 0.45,
                 _ => 0.3,
             }),
+            owner: None,
             location: Some(CodeLocation {
                 file_path,
                 line_start: None,
@@ -472,7 +680,11 @@ fn build_initial_user_prompt(args: &PromptArgs, diff_text: Option<&str>, instruc
     out
 }
 
-fn build_continue_user_prompt(req: &ContinueReviewTurnRequest) -> String {
+fn build_continue_user_prompt(
+    req: &ContinueReviewTurnRequest,
+    attached_contents: &[(String, String, bool)],
+    session: &ReviewSession,
+) -> String {
     let mut out = String::new();
     if let Some(instruction) = &req.instruction {
         out.push_str("继续审查要求:\n");
@@ -480,27 +692,76 @@ fn build_continue_user_prompt(req: &ContinueReviewTurnRequest) -> String {
         out.push_str("\n");
     }
     if !req.focus_finding_ids.is_empty() {
-        out.push_str("重点复核问题:\n");
+        out.push_str("\n重点复核问题:\n");
         for id in &req.focus_finding_ids {
-            out.push_str(&format!("- {}\n", id));
-        }
-    }
-    if !req.attached_files.is_empty() {
-        out.push_str("补充文件:\n");
-        for file in &req.attached_files {
-            out.push_str(&format!("- {}\n", file));
+            if let Some(f) = session.state.findings.iter().find(|x| &x.id == id) {
+                out.push_str(&format!(
+                    "- [{}] {} ({})\n",
+                    severity_str(&f.severity),
+                    f.title,
+                    f.location
+                        .as_ref()
+                        .map(|l| l.file_path.as_str())
+                        .unwrap_or("")
+                ));
+            } else {
+                out.push_str(&format!("- {}\n", id));
+            }
         }
     }
     if !req.extra_context.is_empty() {
-        out.push_str("补充上下文:\n");
+        out.push_str("\n补充上下文:\n");
         for item in &req.extra_context {
             out.push_str(&format!("- {}\n", item));
         }
     }
+    if !attached_contents.is_empty() {
+        out.push_str("\n## 补充文件\n");
+        for (path, content, truncated) in attached_contents {
+            out.push_str(&format!("\n### {}\n", path));
+            if *truncated {
+                out.push_str("> 注意：以下内容已被截断。\n");
+            }
+            out.push_str("```\n");
+            out.push_str(content);
+            if !content.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("```\n");
+        }
+    } else if !req.attached_files.is_empty() {
+        out.push_str("\n补充文件(无法读取内容):\n");
+        for file in &req.attached_files {
+            out.push_str(&format!("- {}\n", file));
+        }
+    }
     if req.generate_final_report {
-        out.push_str("请基于前面所有轮次内容输出最终总结。\n");
+        out.push_str("\n## 请输出最终结论\n");
+        out.push_str("请基于前面所有轮次的推理历史，整合输出完整的最终审查报告。");
+        if !session.state.impact_scope.is_empty() {
+            out.push_str("\n已识别的影响面：\n");
+            for item in &session.state.impact_scope {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
+        if !session.state.release_checks.is_empty() {
+            out.push_str("\n已识别的发布风险：\n");
+            for item in &session.state.release_checks {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
     }
     out
+}
+
+fn severity_str(s: &FindingSeverity) -> &'static str {
+    match s {
+        FindingSeverity::Critical => "critical",
+        FindingSeverity::High => "high",
+        FindingSeverity::Medium => "medium",
+        FindingSeverity::Low => "low",
+        FindingSeverity::Info => "info",
+    }
 }
 
 fn now_string() -> String {

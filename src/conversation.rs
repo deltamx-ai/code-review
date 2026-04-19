@@ -261,6 +261,7 @@ pub struct ReviewFinding {
     pub rationale: Option<String>,
     pub suggestion: Option<String>,
     pub confidence: Option<f32>,
+    pub owner: Option<String>,
     pub location: Option<CodeLocation>,
     pub evidence: Vec<FindingEvidence>,
     pub related_files: Vec<String>,
@@ -327,4 +328,91 @@ fn confidence_to_str(confidence: ReviewConfidence) -> &'static str {
         ReviewConfidence::Medium => "medium",
         ReviewConfidence::Low => "low",
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FindingCounts {
+    pub total: u32,
+    pub high: u32,
+    pub medium: u32,
+    pub low: u32,
+    pub confirmed: u32,
+    pub dismissed: u32,
+}
+
+impl FindingCounts {
+    pub fn from_findings(findings: &[ReviewFinding]) -> Self {
+        let mut out = FindingCounts::default();
+        for f in findings {
+            out.total += 1;
+            match f.severity {
+                FindingSeverity::Critical | FindingSeverity::High => out.high += 1,
+                FindingSeverity::Medium => out.medium += 1,
+                FindingSeverity::Low | FindingSeverity::Info => out.low += 1,
+            }
+            match f.status {
+                FindingStatus::Confirmed => out.confirmed += 1,
+                FindingStatus::Dismissed => out.dismissed += 1,
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub status: ConversationStatus,
+    pub review_mode: ReviewMode,
+    pub repo_root: String,
+    pub provider: String,
+    pub model: String,
+    pub current_turn: u32,
+    pub total_turns: u32,
+    pub finding_counts: FindingCounts,
+    pub admission_ok: Option<bool>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+impl SessionSummary {
+    pub fn from_session(session: &ReviewSession, findings: &[ReviewFinding]) -> Self {
+        Self {
+            id: session.id.clone(),
+            title: session.title.clone(),
+            status: session.status.clone(),
+            review_mode: session.review_mode,
+            repo_root: session.repo_root.display().to_string(),
+            provider: session.provider.clone(),
+            model: session.model.clone(),
+            current_turn: session.current_turn,
+            total_turns: session.total_turns,
+            finding_counts: FindingCounts::from_findings(findings),
+            admission_ok: session.admission.as_ref().map(|a| a.ok),
+            last_error: session.last_error.clone(),
+            created_at: session.created_at.clone(),
+            updated_at: session.updated_at.clone(),
+            completed_at: session.completed_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionListFilter {
+    pub repo: Option<String>,
+    pub status: Option<String>,
+    pub mode: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FindingPatch {
+    pub status: Option<FindingStatus>,
+    pub owner: Option<String>,
+    pub tags: Option<Vec<String>>,
 }

@@ -24,9 +24,15 @@ pub mod providers;
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use cli::{AuthCommand, Cli, Commands};
+use cli::{AuthCommand, Cli, Commands, ReviewSessionCommand};
 use config::load_config;
+use conversation::{FindingPatch, FindingStatus, SessionListFilter};
+use conversation_store::ConversationStore;
+use orchestrator::{
+    continue_session, start_session, ContinueReviewTurnRequest, StartReviewSessionRequest,
+};
 use prompt::print_template;
+use providers::copilot::CopilotCliProvider;
 use services::review_service::{
     execute_analyze, execute_assemble, execute_deep_review, execute_prompt, execute_review, execute_run,
     execute_validate, render_analyze_execution, render_assemble_execution, render_deep_review_execution,
@@ -197,12 +203,171 @@ pub fn run() -> Result<i32> {
             render_review_execution(args.prompt_args.format, &execution)?;
             return Ok(execution.exit_code);
         }
-        Commands::ReviewSession { .. } | Commands::Session { .. } => {
-            bail!("review-session / session CLI commands are not yet wired; use the HTTP API");
+        Commands::ReviewSession { command } => {
+            return dispatch_review_session(&cfg, &store, command);
+        }
+        Commands::Session { .. } => {
+            bail!("the legacy `session` CLI command has been replaced by `review-session`");
         }
     }
 
     Ok(0)
+}
+
+fn dispatch_review_session(
+    cfg: &config::AppConfig,
+    store: &SessionStore,
+    command: ReviewSessionCommand,
+) -> Result<i32> {
+    let convo_store = ConversationStore::new_default()?;
+    match command {
+        ReviewSessionCommand::Start(args) => {
+            let mut prompt = args.prompt.clone();
+            config::apply_config_defaults(&mut prompt, cfg);
+            let provider = CopilotCliProvider::new(store.clone());
+            let result = start_session(
+                &convo_store,
+                &provider,
+                StartReviewSessionRequest {
+                    repo_root: args.repo.clone(),
+                    review_mode: prompt.mode,
+                    provider: args.provider.clone(),
+                    model: args.model.clone().or_else(|| cfg.llm.model.clone()),
+                    base_ref: args.base_ref.clone(),
+                    head_ref: args.head_ref.clone(),
+                    diff_text: args.diff_text.clone(),
+                    prompt_args: prompt,
+                    initial_instruction: args.initial_instruction.clone(),
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "session": result.session,
+                "turn": result.turn,
+                "new_findings": result.new_findings,
+            }))?);
+            Ok(0)
+        }
+        ReviewSessionCommand::Continue(args) => {
+            let provider = CopilotCliProvider::new(store.clone());
+            let result = continue_session(
+                &convo_store,
+                &provider,
+                ContinueReviewTurnRequest {
+                    session_id: args.session_id.clone(),
+                    instruction: args.instruction.clone(),
+                    attached_files: args.attached_files.clone(),
+                    extra_context: args.extra_context.clone(),
+                    focus_finding_ids: args.focus_finding_ids.clone(),
+                    generate_final_report: args.finalize,
+                    model: args.model.clone(),
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&result.session)?);
+            Ok(0)
+        }
+        ReviewSessionCommand::Show(args) => {
+            let session = convo_store.load_session(&args.session_id)?;
+            let turns = convo_store.load_turns(&args.session_id)?;
+            let messages = convo_store.load_messages(&args.session_id)?;
+            let findings = convo_store.load_findings(&args.session_id)?;
+            let artifacts = convo_store.list_artifacts(&args.session_id)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "session": session,
+                    "turns": turns,
+                    "messages": messages,
+                    "findings": findings,
+                    "artifacts": artifacts,
+                }))?
+            );
+            Ok(0)
+        }
+        ReviewSessionCommand::List(args) => {
+            let filter = SessionListFilter {
+                repo: args.repo.clone(),
+                status: args.status.clone(),
+                mode: args.mode.clone(),
+                limit: Some(args.limit),
+                offset: Some(args.offset),
+            };
+            let sessions = convo_store.list_sessions(&filter)?;
+            let total = convo_store.count_sessions(&SessionListFilter {
+                repo: args.repo.clone(),
+                status: args.status.clone(),
+                mode: args.mode.clone(),
+                limit: None,
+                offset: None,
+            })?;
+            match args.format {
+                cli::OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "items": sessions,
+                            "total": total,
+                            "limit": args.limit,
+                            "offset": args.offset,
+                        }))?
+                    );
+                }
+                cli::OutputFormat::Text => {
+                    println!("total: {}", total);
+                    for s in sessions {
+                        println!(
+                            "{} [{:?}] mode={:?} turns={}/{} findings={} updated={}",
+                            s.id,
+                            s.status,
+                            s.review_mode,
+                            s.current_turn,
+                            s.total_turns,
+                            s.finding_counts.total,
+                            s.updated_at,
+                        );
+                    }
+                }
+            }
+            Ok(0)
+        }
+        ReviewSessionCommand::Delete(args) => {
+            convo_store.delete_session(&args.session_id)?;
+            println!("deleted: {}", args.session_id);
+            Ok(0)
+        }
+        ReviewSessionCommand::Finding(args) => {
+            let parsed_status = match args.status.as_deref() {
+                None => None,
+                Some("suspected") => Some(FindingStatus::Suspected),
+                Some("confirmed") => Some(FindingStatus::Confirmed),
+                Some("dismissed") => Some(FindingStatus::Dismissed),
+                Some("fixed") => Some(FindingStatus::Fixed),
+                Some("accepted_risk") | Some("accepted-risk") => Some(FindingStatus::AcceptedRisk),
+                Some(other) => bail!("unknown status: {}", other),
+            };
+            let patch = FindingPatch {
+                status: parsed_status,
+                owner: args.owner.clone(),
+                tags: if args.tags.is_empty() { None } else { Some(args.tags.clone()) },
+            };
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let updated = convo_store.update_finding(
+                &args.session_id,
+                &args.finding_id,
+                &patch,
+                &secs.to_string(),
+            )?;
+            match args.format {
+                cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&updated)?),
+                cli::OutputFormat::Text => {
+                    println!("updated: {} status={:?}", updated.id, updated.status);
+                }
+            }
+            Ok(0)
+        }
+    }
 }
 
 

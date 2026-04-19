@@ -47,6 +47,47 @@ pub enum ReviewSessionCommand {
     Start(ReviewSessionStartArgs),
     Continue(ReviewSessionContinueArgs),
     Show(ReviewSessionShowArgs),
+    List(ReviewSessionListArgs),
+    Delete(ReviewSessionDeleteArgs),
+    Finding(ReviewSessionFindingArgs),
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionListArgs {
+    #[arg(long)]
+    pub repo: Option<String>,
+    #[arg(long)]
+    pub status: Option<String>,
+    #[arg(long)]
+    pub mode: Option<String>,
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionDeleteArgs {
+    #[arg(long)]
+    pub session_id: String,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionFindingArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long)]
+    pub finding_id: String,
+    #[arg(long)]
+    pub status: Option<String>,
+    #[arg(long)]
+    pub owner: Option<String>,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 #[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -83,6 +124,8 @@ pub struct ReviewSessionContinueArgs {
     pub focus_finding_ids: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub finalize: bool,
+    #[arg(long)]
+    pub model: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 }
