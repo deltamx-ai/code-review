@@ -47,7 +47,8 @@ impl IntoResponse for ApiError {
 }
 
 pub fn app(state: ApiState) -> Router {
-    Router::new()
+    let cors_permissive = state.cfg.api.cors_permissive.unwrap_or(false);
+    let router = Router::new()
         .route("/api/health", get(health))
         .route("/api/models", get(models_handler))
         .route("/api/validate", post(validate_handler))
@@ -59,9 +60,13 @@ pub fn app(state: ApiState) -> Router {
         .route("/api/deep-review", post(deep_review_handler))
         .route("/api/review-sessions", post(create_review_session_handler))
         .route("/api/review-sessions/:id", get(get_review_session_handler))
-        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler))
-        .layer(CorsLayer::permissive())
-        .with_state(state)
+        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler));
+    let router = if cors_permissive {
+        router.layer(CorsLayer::permissive())
+    } else {
+        router
+    };
+    router.with_state(state)
 }
 
 pub async fn serve(bind: &str) -> anyhow::Result<()> {

@@ -34,23 +34,30 @@ use services::review_service::{
 };
 use session::SessionStore;
 
-fn apply_context_config(
-    include_context: &mut bool,
-    context_budget_bytes: &mut usize,
-    context_file_max_bytes: &mut usize,
-    cfg: &config::AppConfig,
-) {
+fn apply_context_config(include_context: &mut bool, cfg: &config::AppConfig) {
     if let Some(v) = cfg.review.include_context {
         if !*include_context {
             *include_context = v;
         }
     }
-    if *context_budget_bytes == 48_000 {
-        if let Some(v) = cfg.review.context_budget_bytes { *context_budget_bytes = v; }
-    }
-    if *context_file_max_bytes == 12_000 {
-        if let Some(v) = cfg.review.context_file_max_bytes { *context_file_max_bytes = v; }
-    }
+}
+
+fn resolve_run_context(args: &mut cli::RunArgs, cfg: &config::AppConfig) {
+    apply_context_config(&mut args.include_context, cfg);
+    args.context_budget_bytes = Some(config::resolve_context_budget_bytes(args.context_budget_bytes, cfg));
+    args.context_file_max_bytes = Some(config::resolve_context_file_max_bytes(args.context_file_max_bytes, cfg));
+}
+
+fn resolve_analyze_context(args: &mut cli::AnalyzeArgs, cfg: &config::AppConfig) {
+    apply_context_config(&mut args.include_context, cfg);
+    args.context_budget_bytes = Some(config::resolve_context_budget_bytes(args.context_budget_bytes, cfg));
+    args.context_file_max_bytes = Some(config::resolve_context_file_max_bytes(args.context_file_max_bytes, cfg));
+}
+
+fn resolve_deep_review_context(args: &mut cli::DeepReviewArgs, cfg: &config::AppConfig) {
+    apply_context_config(&mut args.include_context, cfg);
+    args.context_budget_bytes = Some(config::resolve_context_budget_bytes(args.context_budget_bytes, cfg));
+    args.context_file_max_bytes = Some(config::resolve_context_file_max_bytes(args.context_file_max_bytes, cfg));
 }
 
 pub fn run() -> Result<i32> {
@@ -72,7 +79,7 @@ pub fn run() -> Result<i32> {
         }
         Commands::Run(mut args) => {
             config::apply_config_defaults(&mut args.prompt, &cfg);
-            apply_context_config(&mut args.include_context, &mut args.context_budget_bytes, &mut args.context_file_max_bytes, &cfg);
+            resolve_run_context(&mut args, &cfg);
             let execution = execute_run(&args)?;
             render_prompt_execution(args.prompt.format, &execution)?;
             return Ok(execution.exit_code);
@@ -82,7 +89,7 @@ pub fn run() -> Result<i32> {
             if args.model.is_none() {
                 args.model = cfg.llm.model.clone();
             }
-            apply_context_config(&mut args.include_context, &mut args.context_budget_bytes, &mut args.context_file_max_bytes, &cfg);
+            resolve_analyze_context(&mut args, &cfg);
             let execution = execute_analyze(&store, cfg.llm.model.clone(), &args)?;
             render_analyze_execution(args.prompt.format, &execution)?;
             return Ok(execution.exit_code);
@@ -92,7 +99,7 @@ pub fn run() -> Result<i32> {
             if args.model.is_none() {
                 args.model = cfg.llm.model.clone();
             }
-            apply_context_config(&mut args.include_context, &mut args.context_budget_bytes, &mut args.context_file_max_bytes, &cfg);
+            resolve_deep_review_context(&mut args, &cfg);
             let execution = execute_deep_review(&store, &args)?;
             render_deep_review_execution(args.prompt.format, &execution)?;
             return Ok(execution.exit_code);
@@ -189,6 +196,9 @@ pub fn run() -> Result<i32> {
             let execution = execute_review(&store, cfg.llm.model.clone(), &mut args)?;
             render_review_execution(args.prompt_args.format, &execution)?;
             return Ok(execution.exit_code);
+        }
+        Commands::ReviewSession { .. } | Commands::Session { .. } => {
+            bail!("review-session / session CLI commands are not yet wired; use the HTTP API");
         }
     }
 

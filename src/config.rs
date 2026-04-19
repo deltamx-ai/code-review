@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+pub const DEFAULT_CONTEXT_BUDGET_BYTES: usize = 48_000;
+pub const DEFAULT_CONTEXT_FILE_MAX_BYTES: usize = 12_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -12,6 +15,13 @@ pub struct AppConfig {
     pub jira: JiraConfig,
     #[serde(default)]
     pub review: ReviewConfig,
+    #[serde(default)]
+    pub api: ApiConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApiConfig {
+    pub cors_permissive: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,8 +52,8 @@ impl Default for ReviewConfig {
         Self {
             mode: Some(ReviewMode::Standard),
             include_context: Some(false),
-            context_budget_bytes: Some(48_000),
-            context_file_max_bytes: Some(12_000),
+            context_budget_bytes: Some(DEFAULT_CONTEXT_BUDGET_BYTES),
+            context_file_max_bytes: Some(DEFAULT_CONTEXT_FILE_MAX_BYTES),
             output_format: Some(OutputFormat::Text),
             stack: None,
         }
@@ -76,6 +86,14 @@ pub fn save_config(cfg: &AppConfig) -> Result<PathBuf> {
     let text = toml::to_string_pretty(cfg).context("failed to serialize config")?;
     fs::write(&path, text).with_context(|| format!("failed to write config {}", path.display()))?;
     Ok(path)
+}
+
+pub fn resolve_context_budget_bytes(cli: Option<usize>, cfg: &AppConfig) -> usize {
+    cli.or(cfg.review.context_budget_bytes).unwrap_or(DEFAULT_CONTEXT_BUDGET_BYTES)
+}
+
+pub fn resolve_context_file_max_bytes(cli: Option<usize>, cfg: &AppConfig) -> usize {
+    cli.or(cfg.review.context_file_max_bytes).unwrap_or(DEFAULT_CONTEXT_FILE_MAX_BYTES)
 }
 
 pub fn apply_config_defaults(args: &mut PromptArgs, cfg: &AppConfig) {

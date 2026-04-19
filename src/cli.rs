@@ -17,6 +17,10 @@ pub enum Commands {
     Run(RunArgs),
     Analyze(AnalyzeArgs),
     DeepReview(DeepReviewArgs),
+    ReviewSession {
+        #[command(subcommand)]
+        command: ReviewSessionCommand,
+    },
     Serve(ServeArgs),
     Models {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -32,6 +36,63 @@ pub enum Commands {
     },
     Validate(PromptArgs),
     Review(ReviewArgs),
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReviewSessionCommand {
+    Start(ReviewSessionStartArgs),
+    Continue(ReviewSessionContinueArgs),
+    Show(ReviewSessionShowArgs),
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionStartArgs {
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long)]
+    pub base_ref: Option<String>,
+    #[arg(long)]
+    pub head_ref: Option<String>,
+    #[arg(long)]
+    pub diff_text: Option<String>,
+    #[arg(long)]
+    pub initial_instruction: Option<String>,
+    #[command(flatten)]
+    pub prompt: PromptArgs,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionContinueArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long)]
+    pub instruction: Option<String>,
+    #[arg(long = "attached-file")]
+    pub attached_files: Vec<String>,
+    #[arg(long = "extra-context")]
+    pub extra_context: Vec<String>,
+    #[arg(long = "focus-finding")]
+    pub focus_finding_ids: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub finalize: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSessionShowArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 #[derive(Args, Debug, Clone, serde::Deserialize)]
@@ -75,6 +136,51 @@ pub enum AuthCommand {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SessionCommand {
+    Start(SessionStartArgs),
+    Continue(SessionContinueArgs),
+    Show(SessionShowArgs),
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionStartArgs {
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub diff_text: Option<String>,
+    #[command(flatten)]
+    pub prompt: PromptArgs,
+    #[arg(long)]
+    pub instruction: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionContinueArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long)]
+    pub instruction: Option<String>,
+    #[arg(long = "attach")]
+    pub attached_files: Vec<String>,
+    #[arg(long = "context")]
+    pub extra_context: Vec<String>,
+    #[arg(long = "focus-finding")]
+    pub focus_finding_ids: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub finalize: bool,
+}
+
+#[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionShowArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -153,10 +259,10 @@ pub struct RunArgs {
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = false)]
     pub include_context: bool,
-    #[arg(long, default_value_t = 48_000)]
-    pub context_budget_bytes: usize,
-    #[arg(long, default_value_t = 12_000)]
-    pub context_file_max_bytes: usize,
+    #[arg(long)]
+    pub context_budget_bytes: Option<usize>,
+    #[arg(long)]
+    pub context_file_max_bytes: Option<usize>,
 }
 
 impl RunArgs {
@@ -210,10 +316,10 @@ pub struct AnalyzeArgs {
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = true)]
     pub include_context: bool,
-    #[arg(long, default_value_t = 48_000)]
-    pub context_budget_bytes: usize,
-    #[arg(long, default_value_t = 12_000)]
-    pub context_file_max_bytes: usize,
+    #[arg(long)]
+    pub context_budget_bytes: Option<usize>,
+    #[arg(long)]
+    pub context_file_max_bytes: Option<usize>,
 }
 
 impl AnalyzeArgs {
@@ -253,10 +359,10 @@ pub struct DeepReviewArgs {
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = true)]
     pub include_context: bool,
-    #[arg(long, default_value_t = 48_000)]
-    pub context_budget_bytes: usize,
-    #[arg(long, default_value_t = 12_000)]
-    pub context_file_max_bytes: usize,
+    #[arg(long)]
+    pub context_budget_bytes: Option<usize>,
+    #[arg(long)]
+    pub context_file_max_bytes: Option<usize>,
 }
 
 impl DeepReviewArgs {

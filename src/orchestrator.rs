@@ -1,11 +1,12 @@
 use crate::cli::{PromptArgs, ReviewMode};
 use crate::conversation::{
-    ContentFormat, ConversationStatus, MessageRole, ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn,
-    TurnKind, TurnStatus,
+    CodeLocation, ContentFormat, ConversationStatus, FindingCategory, FindingEvidence, FindingSeverity,
+    FindingStatus, MessageRole, ReviewFinding, ReviewMessage, ReviewSession, ReviewTurn, TurnKind, TurnStatus,
 };
 use crate::conversation_store::ConversationStore;
 use crate::providers::{ChatInputMessage, ChatRequest, LlmProvider};
-use crate::review_schema::ReviewResult;
+use crate::review_parser::parse_review_text;
+use crate::review_schema::{ReviewIssue, ReviewResult};
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -102,6 +103,9 @@ pub fn start_session(
         metadata: BTreeMap::new(),
     };
     let response = provider.chat(&chat_req)?;
+    let parsed = parse_review_text(req.review_mode, &response.content, req.prompt_args.rules.clone());
+    let new_findings = findings_from_result(&session_id, &turn_id, 1, &now, &parsed);
+    apply_findings_to_session(&mut session, &new_findings, &parsed);
 
     let assistant_msg = ReviewMessage {
         id: new_id("msg"),
@@ -126,10 +130,10 @@ pub fn start_session(
         instruction: req.initial_instruction,
         requested_files: Vec::new(),
         attached_files: req.prompt_args.context_files.iter().map(|p| p.display().to_string()).collect(),
-        focus_finding_ids: Vec::new(),
+        focus_finding_ids: new_findings.iter().map(|f| f.id.clone()).collect(),
         prompt_text: None,
         response_text: Some(response.content.clone()),
-        parsed_result: None,
+        parsed_result: Some(parsed.clone()),
         token_input: response.usage.as_ref().and_then(|u| u.input_tokens),
         token_output: response.usage.as_ref().and_then(|u| u.output_tokens),
         latency_ms: None,
@@ -149,13 +153,13 @@ pub fn start_session(
         store.append_message(msg)?;
     }
     store.append_message(&assistant_msg)?;
-    store.save_findings(&session.id, &[])?;
+    store.save_findings(&session.id, &session.state.findings)?;
 
     Ok(ReviewOrchestrationResult {
         session,
         turn,
         new_messages: vec![messages[0].clone(), messages[1].clone(), assistant_msg],
-        new_findings: Vec::new(),
+        new_findings,
         final_report: None,
     })
 }
@@ -172,7 +176,7 @@ pub fn continue_session(
     let now = now_string();
     let mut session = store.load_session(&req.session_id)?;
     let history = store.load_messages(&req.session_id)?;
-    let existing_findings = store.load_findings(&req.session_id)?;
+    let mut existing_findings = store.load_findings(&req.session_id)?;
     let next_seq = store.next_message_seq(&req.session_id)?;
     let turn_no = session.total_turns + 1;
     let turn_id = new_id("turn");
@@ -203,6 +207,11 @@ pub fn continue_session(
     };
     let response = provider.chat(&chat_req)?;
 
+    let parsed = parse_review_text(session.review_mode, &response.content, vec![]);
+    let mut new_findings = findings_from_result(&session.id, &turn_id, turn_no, &now, &parsed);
+    let deduped = merge_findings(&mut existing_findings, &mut new_findings, turn_no, &now);
+    apply_findings_to_session(&mut session, &existing_findings, &parsed);
+
     let assistant_msg = ReviewMessage {
         id: new_id("msg"),
         session_id: session.id.clone(),
@@ -217,9 +226,11 @@ pub fn continue_session(
     };
 
     let final_report = if req.generate_final_report {
-        let mut report = ReviewResult::new(session.review_mode, response.content.clone());
-        report.summary = response.content.lines().next().unwrap_or("review completed").to_string();
-        report.finalize();
+        let mut report = parsed.clone();
+        if report.summary.trim().is_empty() {
+            report.summary = response.content.lines().next().unwrap_or("review completed").to_string();
+            report.finalize();
+        }
         session.final_summary = Some(report.summary.clone());
         session.final_report = Some(report.clone());
         session.status = ConversationStatus::Completed;
@@ -239,10 +250,10 @@ pub fn continue_session(
         instruction: req.instruction.clone(),
         requested_files: Vec::new(),
         attached_files: req.attached_files.clone(),
-        focus_finding_ids: req.focus_finding_ids.clone(),
+        focus_finding_ids: deduped.iter().map(|f| f.id.clone()).collect(),
         prompt_text: None,
         response_text: Some(response.content.clone()),
-        parsed_result: final_report.clone(),
+        parsed_result: Some(parsed.clone()),
         token_input: response.usage.as_ref().and_then(|u| u.input_tokens),
         token_output: response.usage.as_ref().and_then(|u| u.output_tokens),
         latency_ms: None,
@@ -268,9 +279,156 @@ pub fn continue_session(
         session,
         turn,
         new_messages: vec![user_msg, assistant_msg],
-        new_findings: Vec::new(),
+        new_findings: deduped,
         final_report,
     })
+}
+
+fn findings_from_result(
+    session_id: &str,
+    turn_id: &str,
+    turn_no: u32,
+    now: &str,
+    result: &ReviewResult,
+) -> Vec<ReviewFinding> {
+    let mut out = Vec::new();
+    append_issue_findings(&mut out, session_id, turn_id, turn_no, now, &result.high_risk, FindingSeverity::High);
+    append_issue_findings(&mut out, session_id, turn_id, turn_no, now, &result.medium_risk, FindingSeverity::Medium);
+    append_issue_findings(&mut out, session_id, turn_id, turn_no, now, &result.low_risk, FindingSeverity::Low);
+    out
+}
+
+fn append_issue_findings(
+    out: &mut Vec<ReviewFinding>,
+    session_id: &str,
+    turn_id: &str,
+    turn_no: u32,
+    now: &str,
+    issues: &[ReviewIssue],
+    severity: FindingSeverity,
+) {
+    for issue in issues {
+        let file_path = issue.file.clone().unwrap_or_else(|| "unknown".into());
+        let symbol = issue.location.clone();
+        let mut related = Vec::new();
+        if let Some(file) = &issue.file {
+            related.push(file.clone());
+        }
+        let description = issue.reason.clone().unwrap_or_else(|| issue.title.clone());
+        out.push(ReviewFinding {
+            id: new_id("finding"),
+            code: None,
+            session_id: session_id.into(),
+            source_turn_id: Some(turn_id.into()),
+            severity: severity.clone(),
+            category: infer_category(issue),
+            status: FindingStatus::Suspected,
+            title: issue.title.clone(),
+            description: description.clone(),
+            rationale: issue.reason.clone(),
+            suggestion: issue.suggestion.clone(),
+            confidence: Some(match severity {
+                FindingSeverity::High => 0.85,
+                FindingSeverity::Medium => 0.65,
+                FindingSeverity::Low => 0.45,
+                _ => 0.3,
+            }),
+            location: Some(CodeLocation {
+                file_path,
+                line_start: None,
+                line_end: None,
+                symbol,
+            }),
+            evidence: vec![FindingEvidence {
+                kind: "model_reasoning".into(),
+                summary: description,
+                content: issue.impact.clone().or(issue.trigger.clone()),
+                artifact_id: None,
+            }],
+            related_files: related,
+            tags: vec![format!("turn:{}", turn_no)],
+            last_seen_turn: Some(turn_no),
+            created_at: now.into(),
+            updated_at: now.into(),
+            resolved_at: None,
+        });
+    }
+}
+
+fn merge_findings(
+    existing: &mut Vec<ReviewFinding>,
+    incoming: &mut Vec<ReviewFinding>,
+    turn_no: u32,
+    now: &str,
+) -> Vec<ReviewFinding> {
+    let mut appended = Vec::new();
+    for finding in incoming.iter() {
+        if let Some(found) = existing.iter_mut().find(|f| same_finding(f, finding)) {
+            found.last_seen_turn = Some(turn_no);
+            found.updated_at = now.into();
+            if matches!(found.status, FindingStatus::Dismissed) {
+                found.status = FindingStatus::Suspected;
+            }
+        } else {
+            appended.push(finding.clone());
+            existing.push(finding.clone());
+        }
+    }
+    appended
+}
+
+fn same_finding(a: &ReviewFinding, b: &ReviewFinding) -> bool {
+    let a_file = a.location.as_ref().map(|l| l.file_path.as_str()).unwrap_or("");
+    let b_file = b.location.as_ref().map(|l| l.file_path.as_str()).unwrap_or("");
+    a.title == b.title && a_file == b_file
+}
+
+fn apply_findings_to_session(session: &mut ReviewSession, findings: &[ReviewFinding], parsed: &ReviewResult) {
+    session.state.findings = findings.to_vec();
+    session.state.pending_finding_ids = findings
+        .iter()
+        .filter(|f| matches!(f.status, FindingStatus::Suspected))
+        .map(|f| f.id.clone())
+        .collect();
+    session.state.confirmed_finding_ids = findings
+        .iter()
+        .filter(|f| matches!(f.status, FindingStatus::Confirmed))
+        .map(|f| f.id.clone())
+        .collect();
+    session.state.dismissed_finding_ids = findings
+        .iter()
+        .filter(|f| matches!(f.status, FindingStatus::Dismissed))
+        .map(|f| f.id.clone())
+        .collect();
+    session.state.release_checks = parsed.release_checks.clone();
+    session.state.impact_scope = parsed.impact_scope.clone();
+}
+
+fn infer_category(issue: &ReviewIssue) -> FindingCategory {
+    let text = format!(
+        "{} {} {} {}",
+        issue.title,
+        issue.reason.clone().unwrap_or_default(),
+        issue.impact.clone().unwrap_or_default(),
+        issue.suggestion.clone().unwrap_or_default()
+    )
+    .to_lowercase();
+
+    if text.contains("兼容") || text.contains("contract") || text.contains("api") {
+        FindingCategory::Compatibility
+    } else if text.contains("sql") || text.contains("数据") || text.contains("migration") {
+        FindingCategory::Data
+    } else if text.contains("发布") || text.contains("回滚") || text.contains("灰度") {
+        FindingCategory::Release
+    } else if text.contains("测试") {
+        FindingCategory::Testability
+    } else if text.contains("性能") || text.contains("超时") {
+        FindingCategory::Performance
+    } else if text.contains("安全") || text.contains("鉴权") {
+        FindingCategory::Security
+    } else {
+        FindingCategory::Logic
+    }
 }
 
 fn to_chat_messages(messages: &[ReviewMessage]) -> Vec<ChatInputMessage> {
@@ -351,6 +509,23 @@ fn now_string() -> String {
 }
 
 fn new_id(prefix: &str) -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{}-{}", prefix, nanos)
+    format!("{}-{}", prefix, uuid::Uuid::new_v4().simple())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_findings_from_review_result() {
+        let parsed = parse_review_text(
+            ReviewMode::Standard,
+            "高风险问题\n- src/order/service.rs:create_order 可能重复下单 原因: 缺少幂等校验\n总结结论\n- 有风险",
+            vec![],
+        );
+        let findings = findings_from_result("s1", "t1", 1, "1", &parsed);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, FindingSeverity::High);
+        assert_eq!(findings[0].location.as_ref().unwrap().file_path, "src/order/service.rs");
+    }
 }

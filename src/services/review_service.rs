@@ -1,5 +1,6 @@
 use crate::admission::{check_admission, AdmissionResult};
 use crate::cli::{AnalyzeArgs, AnalyzeStrategy, DeepReviewArgs, OutputFormat, PromptArgs, ReviewArgs, ReviewMode, RunArgs};
+use crate::config::{DEFAULT_CONTEXT_BUDGET_BYTES, DEFAULT_CONTEXT_FILE_MAX_BYTES};
 use crate::context;
 use crate::copilot;
 use crate::gitops;
@@ -198,8 +199,8 @@ fn prepare_run_prompt(args: &RunArgs) -> Result<(PromptArgs, String, context::Co
         context::read_repo_context_with_budget(
             &args.repo,
             &prompt_args.context_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-            args.context_budget_bytes,
-            args.context_file_max_bytes,
+            args.context_budget_bytes.unwrap_or(DEFAULT_CONTEXT_BUDGET_BYTES),
+            args.context_file_max_bytes.unwrap_or(DEFAULT_CONTEXT_FILE_MAX_BYTES),
         )?
     } else {
         context::ContextCollection::default()
@@ -264,22 +265,18 @@ pub fn execute_review(
         let report = validate_and_repair_review_result(mode, &mut parsed);
         parsed.apply_validation_report(report.clone());
         if !report.ok {
-            parsed.repair_attempted = true;
-            let repaired_prompt = build_repair_prompt(&response, mode);
-            if let Ok(repaired_text) = copilot::run_review(store, &repaired_prompt, args.model.as_deref()) {
-                let mut repaired = parse_review_text(mode, &repaired_text, prompt_args.rules.clone());
-                let admission = check_admission_for_prompt_args(&prompt_args);
-                repaired.apply_admission(admission.ok, admission.level, admission.score, admission.confidence);
-                repaired.apply_risk_analysis(analyze_risks(&prompt_args, &changed_files, None));
-                repaired.finalize();
-                let second_report = validate_and_repair_review_result(mode, &mut repaired);
-                repaired.apply_validation_report(second_report.clone());
-                repaired.repair_attempted = true;
-                repaired.repair_succeeded = second_report.ok;
-                if second_report.ok {
-                    parsed = repaired;
-                }
-            }
+            let repair_admission = check_admission_for_prompt_args(&prompt_args);
+            try_repair(
+                store,
+                args.model.as_deref(),
+                mode,
+                &response,
+                &mut parsed,
+                &repair_admission,
+                &prompt_args,
+                &changed_files,
+                None,
+            );
         }
     }
 
@@ -311,8 +308,8 @@ pub fn execute_deep_review(store: &SessionStore, args: &DeepReviewArgs) -> Resul
         context::read_repo_context_with_budget(
             &args.repo,
             &prompt_args.context_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-            args.context_budget_bytes,
-            args.context_file_max_bytes,
+            args.context_budget_bytes.unwrap_or(DEFAULT_CONTEXT_BUDGET_BYTES),
+            args.context_file_max_bytes.unwrap_or(DEFAULT_CONTEXT_FILE_MAX_BYTES),
         )?
     } else {
         context::ContextCollection::default()
@@ -351,8 +348,8 @@ pub fn execute_deep_review(store: &SessionStore, args: &DeepReviewArgs) -> Resul
         context::read_repo_context_with_budget(
             &args.repo,
             &stage2_args.context_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-            args.context_budget_bytes,
-            args.context_file_max_bytes,
+            args.context_budget_bytes.unwrap_or(DEFAULT_CONTEXT_BUDGET_BYTES),
+            args.context_file_max_bytes.unwrap_or(DEFAULT_CONTEXT_FILE_MAX_BYTES),
         )?
     } else {
         context::ContextCollection::default()
@@ -372,21 +369,18 @@ pub fn execute_deep_review(store: &SessionStore, args: &DeepReviewArgs) -> Resul
     let stage2_report = validate_and_repair_review_result(stage2_args.mode, &mut stage2);
     stage2.apply_validation_report(stage2_report.clone());
     if !stage2_report.ok {
-        stage2.repair_attempted = true;
-        let repaired_prompt = build_repair_prompt(&stage2_output, stage2_args.mode);
-        if let Ok(repaired_text) = copilot::run_review(store, &repaired_prompt, args.model.as_deref()) {
-            let mut repaired = parse_review_text(stage2_args.mode, &repaired_text, stage2_args.rules.clone());
-            repaired.apply_admission(stage1_admission.ok, stage1_admission.level, stage1_admission.score, stage1_admission.confidence);
-            repaired.apply_risk_analysis(analyze_risks(&stage2_args, &stage2_args.files, None));
-            repaired.finalize();
-            let second_report = validate_and_repair_review_result(stage2_args.mode, &mut repaired);
-            repaired.apply_validation_report(second_report.clone());
-            repaired.repair_attempted = true;
-            repaired.repair_succeeded = second_report.ok;
-            if second_report.ok {
-                stage2 = repaired;
-            }
-        }
+        let stage2_files_snapshot = stage2_args.files.clone();
+        try_repair(
+            store,
+            args.model.as_deref(),
+            stage2_args.mode,
+            &stage2_output,
+            &mut stage2,
+            &stage1_admission,
+            &stage2_args,
+            &stage2_files_snapshot,
+            None,
+        );
     }
 
     let exit_code = exit_code_for_result(&stage2);
@@ -503,6 +497,36 @@ pub fn render_analyze_execution(format: OutputFormat, execution: &AnalyzeExecuti
 
 fn check_admission_for_prompt_args(args: &PromptArgs) -> AdmissionResult {
     check_admission(args, args.diff_file.is_some(), !args.context_files.is_empty() || !args.files.is_empty())
+}
+
+fn try_repair(
+    store: &SessionStore,
+    model: Option<&str>,
+    mode: ReviewMode,
+    raw_first_response: &str,
+    first_result: &mut ReviewResult,
+    admission: &AdmissionResult,
+    prompt_args: &PromptArgs,
+    risk_files: &[String],
+    risk_diff: Option<&str>,
+) {
+    first_result.repair_attempted = true;
+    let repaired_prompt = build_repair_prompt(raw_first_response, mode);
+    let repaired_text = match copilot::run_review(store, &repaired_prompt, model) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let mut repaired = parse_review_text(mode, &repaired_text, prompt_args.rules.clone());
+    repaired.apply_admission(admission.ok, admission.level, admission.score, admission.confidence);
+    repaired.apply_risk_analysis(analyze_risks(prompt_args, risk_files, risk_diff));
+    repaired.finalize();
+    let second_report = validate_and_repair_review_result(mode, &mut repaired);
+    repaired.apply_validation_report(second_report.clone());
+    repaired.repair_attempted = true;
+    repaired.repair_succeeded = second_report.ok;
+    if second_report.ok {
+        *first_result = repaired;
+    }
 }
 
 fn exit_code_for_result(result: &ReviewResult) -> i32 {
