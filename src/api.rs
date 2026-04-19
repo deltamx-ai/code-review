@@ -67,12 +67,12 @@ pub fn app(state: ApiState) -> Router {
             get(list_review_sessions_handler).post(create_review_session_handler),
         )
         .route(
-            "/api/review-sessions/:id",
+            "/api/review-sessions/{id}",
             get(get_review_session_handler).delete(delete_review_session_handler),
         )
-        .route("/api/review-sessions/:id/turns", post(append_review_turn_handler))
+        .route("/api/review-sessions/{id}/turns", post(append_review_turn_handler))
         .route(
-            "/api/review-sessions/:id/findings/:finding_id",
+            "/api/review-sessions/{id}/findings/{finding_id}",
             patch(update_review_finding_handler),
         );
     let router = if cors_permissive {

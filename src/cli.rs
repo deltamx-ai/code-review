@@ -65,6 +65,7 @@ pub struct ReviewSessionListArgs {
     #[arg(long, default_value_t = 0)]
     pub offset: usize,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    #[serde(default = "default_output_format")]
     pub format: OutputFormat,
 }
 
@@ -242,6 +243,22 @@ pub enum ReviewMode {
     Critical,
 }
 
+fn default_jira_provider() -> String {
+    "native".to_string()
+}
+
+fn default_output_format() -> OutputFormat {
+    OutputFormat::Text
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Args, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PromptArgs {
     #[arg(long, value_enum, default_value_t = ReviewMode::Standard)]
@@ -253,8 +270,10 @@ pub struct PromptArgs {
     #[arg(long)]
     pub why: Option<String>,
     #[arg(long = "rule")]
+    #[serde(default)]
     pub rules: Vec<String>,
     #[arg(long = "risk")]
+    #[serde(default)]
     pub risks: Vec<String>,
     #[arg(long)]
     pub expected_normal: Option<String>,
@@ -265,30 +284,38 @@ pub struct PromptArgs {
     #[arg(long)]
     pub issue: Option<String>,
     #[arg(long = "test-result")]
+    #[serde(default)]
     pub test_results: Vec<String>,
     #[arg(long)]
     pub jira: Option<String>,
     #[arg(long = "jira-base-url")]
     pub jira_base_url: Option<String>,
     #[arg(long = "jira-provider", default_value = "native")]
+    #[serde(default = "default_jira_provider")]
     pub jira_provider: String,
     #[arg(long = "jira-command")]
     pub jira_command: Option<String>,
     #[arg(long)]
     pub diff_file: Option<PathBuf>,
     #[arg(long = "context-file")]
+    #[serde(default)]
     pub context_files: Vec<PathBuf>,
     #[arg(long = "file")]
+    #[serde(default)]
     pub files: Vec<String>,
     #[arg(long = "focus")]
+    #[serde(default)]
     pub focus: Vec<String>,
     #[arg(long = "baseline-file")]
+    #[serde(default)]
     pub baseline_files: Vec<PathBuf>,
     #[arg(long = "incident-file")]
+    #[serde(default)]
     pub incident_files: Vec<PathBuf>,
     #[arg(long = "type", help = "Change type: server, db, frontend, infra, contract, api")]
     pub change_type: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    #[serde(default = "default_output_format")]
     pub format: OutputFormat,
 }
 
@@ -301,6 +328,7 @@ pub struct RunArgs {
     #[command(flatten)]
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = false)]
+    #[serde(default = "default_false")]
     pub include_context: bool,
     #[arg(long)]
     pub context_budget_bytes: Option<usize>,
@@ -358,6 +386,7 @@ pub struct AnalyzeArgs {
     #[command(flatten)]
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = true)]
+    #[serde(default = "default_true")]
     pub include_context: bool,
     #[arg(long)]
     pub context_budget_bytes: Option<usize>,
@@ -401,6 +430,7 @@ pub struct DeepReviewArgs {
     #[command(flatten)]
     pub prompt: PromptArgs,
     #[arg(long, default_value_t = true)]
+    #[serde(default = "default_true")]
     pub include_context: bool,
     #[arg(long)]
     pub context_budget_bytes: Option<usize>,
